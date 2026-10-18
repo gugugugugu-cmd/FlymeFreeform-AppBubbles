@@ -33,7 +33,7 @@ import io.github.mangi.flymefreeform.gesture.GestureAction
 import io.github.mangi.flymefreeform.hook.ModuleEnvironmentState
 import io.github.mangi.flymefreeform.hook.ProcessConfiguration
 import io.github.mangi.flymefreeform.platform.common.AppLaunchCommitter
-import io.github.mangi.flymefreeform.platform.pixel.PixelBubbleLaunchCommitter
+import io.github.mangi.flymefreeform.platform.common.SystemServerAccess
 import io.github.mangi.flymefreeform.window.CornerRadialOverlayView
 import java.lang.reflect.Proxy
 import java.util.concurrent.ArrayBlockingQueue
@@ -42,7 +42,7 @@ import java.util.concurrent.TimeUnit
 
 /** system_server 中的唯一长期所有者：WMS 指针监听、Overlay、目录缓存与启动适配。 */
 internal class ColorOsFreeformCoordinator(
-    private val controller: Any,
+    private val systemServer: SystemServerAccess,
     private val classLoader: ClassLoader,
     private val configuration: ProcessConfiguration,
     private val environmentState: ModuleEnvironmentState,
@@ -54,7 +54,7 @@ internal class ColorOsFreeformCoordinator(
      */
     private val committer: AppLaunchCommitter? = null,
 ) : CornerRadialOverlayView.Listener {
-    private val context = readField(controller, "mContext") as Context
+    private val context = systemServer.context
     private val handler = Handler(Looper.getMainLooper())
     private val catalogExecutor =
         ThreadPoolExecutor(
@@ -70,9 +70,6 @@ internal class ColorOsFreeformCoordinator(
     private val gestureEngine = CornerGestureEngine()
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
 
-    // 阶段 2：Pixel 气泡后端提交器（惰性解析，只判定一次）
-    private var pixelCommitterResolved = false
-    private var resolvedPixelCommitter: AppLaunchCommitter? = null
     private val launcher = ColorOsFreeformLauncher(context)
     private val sidebar = ColorOsSidebarClient(context, handler, logger)
     @Volatile
@@ -499,7 +496,7 @@ internal class ColorOsFreeformCoordinator(
 
     /** 平台无关提交：优先走注入的 committer，否则回退 ColorOS 直接启动。 */
     private fun launchWithCommitter(component: ComponentName): FreeformLaunchResult {
-        val injected = committer ?: pixelCommitter()
+        val injected = committer
         if (injected != null) {
             val accepted = try {
                 injected.commit(component)
@@ -511,47 +508,6 @@ internal class ColorOsFreeformCoordinator(
             else FreeformLaunchResult.Failed("COMMITTER_REJECTED", CommitterRejectedException(component.flattenToString()))
         }
         return launcher.launch(component)
-    }
-
-    /**
-     * Pixel / Android 17 气泡后端的提交器（阶段 2 §5.2.1 的实际接线）。
-     *
-     * 仅当本进程是 SystemUI 且运行在支持原生 App Bubbles 的 Pixel 形态上时才启用；
-     * 其它平台返回 null，保持 ColorOS 原生启动的既有行为不变。
-     */
-    private fun pixelCommitter(): AppLaunchCommitter? {
-        if (pixelCommitterResolved) return resolvedPixelCommitter
-        pixelCommitterResolved = true
-        resolvedPixelCommitter =
-            try {
-                if (!isBubbleCapablePlatform()) {
-                    null
-                } else {
-                    PixelBubbleLaunchCommitter(
-                        context = context,
-                        debugSink = { msg -> logger(Log.INFO, "BUBBLE_DIAG $msg", null) },
-                    ).also { logger(Log.INFO, "PIXEL_COMMITTER_ATTACHED", null) }
-                }
-            } catch (t: Throwable) {
-                logger(Log.WARN, "PIXEL_COMMITTER_ATTACH_FAILED ${t.javaClass.simpleName}", t)
-                null
-            }
-        return resolvedPixelCommitter
-    }
-
-    /**
-     * 是否启用 Pixel 气泡后端：SystemUI 进程 + 系统带 `android.service.notification.Bubbles`
-     * 实现（A17 / Pixel 形态）。ColorOS 设备不满足，直接走原路径。
-     */
-    private fun isBubbleCapablePlatform(): Boolean {
-        val pkg = context.packageName
-        if (pkg != "com.android.systemui") return false
-        return try {
-            classLoader.loadClass("com.android.wm.shell.bubbles.BubbleController")
-            true
-        } catch (_: Throwable) {
-            false
-        }
     }
 
     /** committer 拒绝提交时的哨兵异常（Failed.cause 为非空 Throwable）。 */
@@ -822,7 +778,7 @@ internal class ColorOsFreeformCoordinator(
             if (packageName in CRITICAL_PACKAGES) return true
         }
         return try {
-            val atms = readField(controller, "mAtms") ?: return false
+            val atms = systemServer.activityTaskManager ?: return false
             val root = readField(atms, "mRootWindowContainer") ?: return false
             val task = findMethod(root.javaClass, "getTopDisplayFocusedRootTask", 0).invoke(root) ?: return false
             val activity =
@@ -851,7 +807,9 @@ internal class ColorOsFreeformCoordinator(
         }
 
     private fun readWindowManagerService(): Any {
-        val atms = readField(controller, "mAtms") ?: throw NoSuchFieldException("mAtms")
+        val atms =
+            systemServer.activityTaskManager
+                ?: throw NoSuchFieldException("ActivityTaskManagerService unavailable")
         return readField(atms, "mWindowManager") ?: throw NoSuchFieldException("mWindowManager")
     }
 
