@@ -69,6 +69,51 @@
 
 ---
 
-## 5. 进度
+## 5. 已确认的遗留项结论
+
+### 5.1 `OUTSIDE_TAP_TARGET_UNAVAILABLE` —— 非功能缺失，判定关闭
+
+`hook/OutsideTapCloseHookInstaller.kt` 依赖 ColorOS 专有的
+`FlexibleTaskController$TouchListener` / `FlexibleCaptionView`，Pixel 上不存在，
+因此该 hook 必然安装失败。
+
+但「点扇形外空白关闭」并不依赖它：`CornerRadialOverlayView.kt` 第 395–428 行
+以全屏 `Box` + `pointerInput { awaitEachGesture { awaitFirstDown(); requestDismiss() } }`
+在 Compose 层实现同一能力，`MoreAppsPanel` 在其后声明，触摸优先级更高。
+故 AOSP 上行为完整，仅剩「点击穿透到下层应用」与 ColorOS 原生 hook 的差异
+（超出屏幕自行扩展区域后才点得到，影响面极小）。
+
+### 5.2 三处 `*_TARGET_UNAVAILABLE` 告警消歧
+
+`OUTSIDE_TAP` / `HANDLE_SWIPE_UP` / `SIDEBAR_TOOL` 三条统一补
+`reason=coloros-class-absent (AOSP 无此实现，非功能缺失)`，
+避免后续审查再次误判为缺陷。
+
+### 5.3 e0 可观测点失效（已修）
+
+e0 的 `RADIAL_PANEL_SHOWN` / `RADIAL_DISMISS_REQUESTED` 用
+`android.util.Log` 打 `TAG=FlymeFreeformTool`，而 LSPosed 模块进程内的
+`android.util.Log` 不进入导出日志（阶段 3 已踩过同一坑）。
+2026-10-18 实机日志 `modules_2026-10-18T20_07_22.277594.log` 中两条均缺失，
+证实该问题。
+
+修复：`CornerRadialOverlayView` 新增构造参数 `moduleLog: (String) -> Unit`，
+由 `ColorOsFreeformCoordinator.showOverlay()` 传入 `logger(Log.INFO, code, null)`。
+同时补 `reason` 字段区分七条关闭路径：
+
+| reason | 触发点 |
+|---|---|
+| `timeout` | `PANEL_TIMEOUT_MS` 到期 |
+| `outside-tap` | 点击扇形外空白 |
+| `back` | 返回键 |
+| `size-changed` | 窗口尺寸变化（旋转 / 分屏） |
+| `selected` | 选中应用并提交 |
+| `cancelled` | 拖出扇形后松手取消 |
+| `exit-finished` | 退场动画结束且无待提交项 |
+
+## 6. 进度
 
 - 2026-10-18：阶段 4 立项，盘点菜单实现现状，建立遗留项与回归清单
+- 2026-10-18：e0 构建；确认 `OUTSIDE_TAP` 为平台差异；三处告警加 reason
+- 2026-10-18：e1 构建（commit `25dbf26`，CI `39126410851` success），
+  菜单日志改走模块 logger 并补 `reason`，SHA-256 `039e895b…42e6014`
