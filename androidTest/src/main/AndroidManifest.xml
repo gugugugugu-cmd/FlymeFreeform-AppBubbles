@@ -1,24 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    阶段 5 安全验证夹具（见 docs/PHASE5_SECURITY_PROBE.md）。
+  阶段 5 的 IPC 安全验证夹具。独立模块，不进主 APK。
 
-    本模块只产出一个 APK，同时充当「宿主应用」与「instrumentation 目标」：
-    - 不声明任何 Activity / 服务 / 接收器 —— 安装后桌面无图标，也没有可被外部
-      拉起的组件面，纯粹是一个能在普通应用 UID 下执行代码的载体。
-    - <instrumentation> 指向平台自带的 android.test.InstrumentationTestRunner，
-      因此不依赖 androidx.test，也不需要额外 JUnit 依赖。
+  注意：这里**不声明 instrument**。
+  第一版用 instrumentation 加载主模块包作为目标，会把主模块的 Xposed 入口
+  在一个没有 module 实例的进程里跑起来，导致进程直接崩溃（详见 ForgeActivity 注释）。
+  现在只有一个 Activity，启动即发广播。
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 夹具的唯一职责：以普通应用身份发广播。不需要任何权限 -->
     <application
         android:allowBackup="false"
         android:label="FlymeFreeform Forge"
-        android:hasCode="true" />
+        android:supportsRtl="true">
 
-    <instrumentation
-        android:name="android.test.InstrumentationTestRunner"
-        android:targetPackage="io.github.mangi.flymefreeform.forge"
-        android:functionalTest="true" />
+        <activity
+            android:name=".forge.ForgeActivity"
+            android:exported="true"
+            android:label="FlymeFreeform Forge">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
 
 </manifest>

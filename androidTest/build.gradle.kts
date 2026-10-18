@@ -8,25 +8,25 @@ plugins {
  * 独立模块而不是 app 的 androidTest 源集：夹具必须能被单独安装、单独卸载，
  * 且绝不能把验证代码混进模块主 APK 的发布产物里。
  *
- * 不依赖 Kotlin：整个夹具是一个 Java Instrumentation 测试，
- * 只用 android.jar + 平台自带的 JUnit/runner，避免为了一次验证引入新的构建面。
+ * 不依赖 Kotlin，也不用 instrumentation：夹具只是一个 Java Activity，
+ * 编译输入只有 android.jar，避免为了一次验证引入新的构建面。
  */
+// 阶段 5 的 IPC 安全验证夹具：一个 Activity，启动即向 SystemUI 发三条伪造广播。
+// 不含测试基础设施（见 AndroidManifest.xml 顶部说明）。
 android {
     namespace = "io.github.mangi.flymefreeform.forge"
-    compileSdk {
-        version = release(37)
-    }
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "io.github.mangi.flymefreeform.forge"
-        minSdk = 35
+        minSdk = 34
         targetSdk = 37
         versionCode = 1
-        versionName = "1.0-forge"
+        versionName = "1.0"
     }
 
     buildTypes {
-        debug {
+        release {
             isMinifyEnabled = false
         }
     }
@@ -35,16 +35,4 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
-    sourceSets {
-        // 夹具本体放在 androidTest 源集里：安装后作为 instrumentation 运行，
-        // 不产生会在桌面出现的启动图标，也就没有"夹具应用被用户误点"的风险。
-        getByName("androidTest") {
-            java.srcDirs("src/main/java")
-        }
-    }
 }
-
-// 无 dependencies 块：夹具只用 android.jar 与平台自带的
-// android.test.InstrumentationTestRunner + JUnit4，不引入 androidx.test。
-// 运行方式见 docs/PHASE5_SECURITY_PROBE.md §5。
