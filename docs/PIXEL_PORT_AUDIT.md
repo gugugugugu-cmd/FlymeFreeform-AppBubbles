@@ -24,8 +24,8 @@
 | 7 | `com.android.systemui.application.impl.SystemUIApplicationImpl` | SystemUI | ❌ ColorOS 17 专属候选 | 🟡 中（有回退候选） |
 | 8 | `com.android.systemui.SystemUIApplication` | SystemUI | ✅ AOSP 标准类 | 🟢 低 |
 | 9 | `PROCESS_LAUNCHER = "com.android.launcher"` | Launcher | ❌ Pixel 用 `com.google.android.apps.nexuslauncher` | 🟠 高 |
-| 10 | `SystemUiProxy.showAppBubble(...)`（MoreBubbleButton） | Launcher | ✅ AOSP 类（A17 存在） | 🟡 中（待验证签名） |
-| 11 | `BubbleController.expandStackAndSelectAppBubble(...)` | SystemUI/WMShell | ✅ AOSP 类（A17 新签名） | 🟡 中（待验证签名） |
+| 10 | `SystemUiProxy.showAppBubble(...)`（MoreBubbleButton） | Launcher | ✅ AOSP 类（A17 存在） | 🟢 已核验：`(Intent, UserHandle, EntryPoint, BubbleBarLocation)V` |
+| 11 | `BubbleController.expandStackAndSelectAppBubble(...)` | SystemUI/WMShell | ✅ AOSP 类（A17 新签名） | 🟢 已核验：`(Bubble, EntryPoint, UpdateLocationRequest)V` |
 | 12 | `WindowManagerPolicyConstants$PointerEventListener` | system_server | ✅ AOSP 标准接口 | 🟢 低 |
 | 13 | `setTrustedOverlay` / `getViewRootImpl` / `pilferPointers` | SystemUI | ✅ AOSP API（隐藏） | 🟡 中 |
 | 14 | 自由窗启动 Bundle 协议（`FLEXIBLE_WINDOWING_MODE=100` 等） | system_server | ❌ ColorOS 私有协议 | 🔴 致命（即将被替换） |
@@ -180,7 +180,7 @@
 | 45-48 | `onPackageLoaded` 匹配 `com.google.android.apps.nexuslauncher` / `com.android.launcher3` | 源码 |
 | 1146-1183 | `bubbleCurrentTask(...)`：`mLauncherClassLoader.loadClass("com.android.quickstep.SystemUiProxy")` → `INSTANCE.get(ctx)` → 遍历方法名 `showAppBubble` → `invoke(proxy, bIntent, userHandle, ep, null)` | 源码 |
 | 1162-1171 | 从 `Task.key.baseIntent` 取 Intent、`Task.key.userId` 取 userId、`task.getTopComponent()` 精确定位组件 | 源码 |
-| 1176 | `showAppBubble(Intent, UserHandle, EntryPoint, BubbleBarLocation$UpdateLocationRequest)` — 通过方法名+反射找签名 | 源码（签名待 DEX 核验） |
+| 1176 | `showAppBubble(Intent, UserHandle, EntryPoint, BubbleBarLocation)` — 方法名+反射找签名 | ✅ 已 DEX 核验（Launcher 17） |
 
 **结论**：MoreBubbleButton 已实证 **Pixel Launcher（nexuslauncher/launcher3）进程可注入、`SystemUiProxy.INSTANCE` 可获取、`showAppBubble` 存在**（README 声明其 Release 在 Android 16+/Pixel Launcher 上工作）。这为任务书路线 A 提供了"源码级存在性"证据；**但**：
 - 它只处理"**最近任务中的既有任务**"→ 气泡化，Intent 来源是 Task 的 baseIntent；**不是**"任意新应用直接气泡启动"。
@@ -279,10 +279,28 @@
 
 ### 10.1 核验素材
 
-| APK | 包名 | 版本 | versionCode | minSdk | 工作区 ID |
-|-----|------|------|-------------|--------|-----------|
-| Pixel 启动器_17.apk | `com.google.android.apps.nexuslauncher` | 17 | 907 | 37 | `holgxhyk` |
-| 系统界面_17.apk | `com.android.systemui` | 17 | 37 | 37 | `81i4aezl` |
+| APK | 包名 | 版本 | versionCode | minSdk | 工作区 ID | 大小 | 签名证书 SHA-256 |
+|-----|------|------|-------------|--------|-----------|------|-----------------|
+| Pixel 启动器_17.apk | `com.google.android.apps.nexuslauncher` | 17 | 907 | 37 | `holgxhyk` | 17,335,691 B | `a86bdb059f28f265162d64ce6c8d9772901d227e741581d1f04a5ed132a574d0` |
+| 系统界面_17.apk | `com.android.systemui` | 17 | 37 | 37 | `81i4aezl` | 48,329,834 B | `6b969075087141e27e9daab39e18bafac34ea3ef8d469986530f83f85fd5d70e` |
+| 微信_8.0.79.apk | `com.tencent.mm` | 8.0.79 | — | — | `43iws0i1` | 285,284,760 B | `0fe4ff85c215918396dadc7cd8ce6963339af33d37751a56e54c7206b63a3c7c` |
+| 起点读书_7.9.480.apk | `com.qidian.QDReader` | 7.9.480 | — | — | `gg5gw90n` | 119,058,710 B | `675e09c940ea63c6fde1552eb8c868743335df7fa60f1ef864ebc13612cc957e` |
+| Telegram_13.0.3.apk | `org.telegram.messenger` | 13.0.3 | — | — | `fp7m07t5` | 70,395,155 B | `49c1522548ebacd46ce322b6fd47f6092bb745d0f88082145caf35e14dcc38e1` |
+
+**来源路径**：全部位于 MT 设备侧 `/storage/emulated/0/MT2/mcp/`。
+
+**证据说明**：
+- 证书 SHA-256 由 `mt_apk_read_signature` 直接读取（比文件哈希更强的真伪证据——证书由 APK 签名私钥生成，伪造需同一私钥）。
+- `系统界面_17.apk` 证书 subject 为 `CN=cnmrlin`（**第三方定制 ROM 签名，非 Google 原厂**）——核验结论限定于该构建；`Pixel 启动器_17.apk` 为 Google 签名（与 Play 版 nexuslauncher 一致）。
+- **文件级 SHA-256 回填命令**（真机执行，MT 目录下）：
+
+```bash
+sha256sum /storage/emulated/0/MT2/mcp/Pixel\ 启动器_17.apk
+sha256sum /storage/emulated/0/MT2/mcp/系统界面_17.apk
+sha256sum /storage/emulated/0/MT2/mcp/微信_8.0.79.apk
+sha256sum /storage/emulated/0/MT2/mcp/起点读书_7.9.480.apk
+sha256sum /storage/emulated/0/MT2/mcp/Telegram_13.0.3.apk
+```
 
 > `81i4aezl` 与 MoreBubbleButton README 记载的"MT 工作区 `81i4aezl`"完全一致——证实这套 APK 就是作者核验时使用的目标素材。
 
@@ -321,4 +339,49 @@
 
 ---
 
-*文档结束 · PIXEL_PORT_AUDIT.md · 阶段 0 · 只读侦察 + DEX 核验*
+## 11. 阶段 1 最小验证方案（审查报告要求）
+
+> 目的：以**最小成本**将 L1（签名存在）升级为 L3（端到端可用），不写业务代码。
+> 原则：**用官方/开源现成模块验证后端，不自己发明调用**。
+
+### 11.1 验证目标（按优先级）
+
+| # | 假设 | 验证方法 | 通过判据 |
+|---|------|---------|---------|
+| V1 | `SystemUiProxy.showAppBubble` 接受任意 Intent 创建新 app bubble | 安装原版 MoreBubbleButton v1.7，勾选 SystemUI + nexuslauncher 作用域，从「最近任务」点气泡按钮启动**从未开过的应用**（起点读书） | 起点读书气泡出现于气泡栏，且可展开为悬浮窗 |
+| V2 | `expandStackAndSelectAppBubble` 接受"构造 Bubble + 任意 Intent" | 同上，用「当前任务气泡化」按钮启动另一新应用（微信） | 微信气泡出现，悬浮窗展开正常 |
+| V3 | LSPosed 可注入 nexuslauncher 进程 | 观察 LSPosed 日志中模块对 nexuslauncher 的注入记录 | `Loaded Xposed module ... into process ...nexuslauncher` |
+| V4 | 跨进程手势→气泡链路（本项目最终形态的预研） | 阶段 1 不做代码，仅确认：system_server 注入能力（LSPosed 对 system_server 勾选后日志） | 日志显示 system_server 注入成功 |
+
+### 11.2 最小工具链（全部开源/现有）
+
+| 组件 | 来源 | 用途 |
+|------|------|------|
+| LSPosed | 官方 | 注入 SystemUI / nexuslauncher / system_server |
+| MoreBubbleButton v1.7（**原版未修改**） | `upstream/MoreBubbleButton` @ `81630ab` | 现成的气泡按钮入口（路径 L + S 都已实现） |
+| GitHub Actions 编译 APK | 开发仓库 | 产出可安装 APK（compileSdk 37，任务书要求不本地构建） |
+| MT 工作区 `81i4aezl` / `holgxhyk` | 现有 | 复核/调试签名 |
+
+### 11.3 验证流程（用户真机侧，阶段 1）
+
+1. 在开发仓库启用 GitHub Actions，构建 **MoreBubbleButton v1.7 原版** APK（不改代码）。
+2. 安装 APK → LSPosed 勾选 `SystemUI` + `com.google.android.apps.nexuslauncher`（不勾 system_server，先验证普通路径）。
+3. 测试矩阵（对应 V1/V2）：
+   - 冷启动路径：开一个**从未气泡化过**的应用（起点读书）→ 最近任务 → 点气泡按钮 → 是否出现气泡。
+   - 热启动路径：同一应用二次进入 → 气泡按钮 → 气泡是否复用（验证 `findAndRemoveBubbleFromOverflow` 行为）。
+4. 记录：气泡是否出现 / 悬浮窗是否可展开 / 双击是否转全屏 / 微信与起点读书差异。
+5. 回填 `DEVICE_BASELINE_TEMPLATE.md` §1/§2/§4 + APK 文件 SHA-256。
+
+### 11.4 预期结果与分支
+
+- **V1 通过** → 路线 A 成立（任意 Intent 可气泡化），阶段 2 在 system_server 侧实现手势→`SystemUiProxy` 调用（或直接 Binder）。
+- **V1 失败、V2 通过** → 路线 B 成立，阶段 2 需新增 system_server→SystemUI 的 IPC 入口（最大技术决策点）。
+- **V1/V2 都失败** → 气泡后端被 ROM 改动/裁剪，需检查 `BubbleController` 初始化条件（`bubblesEnabled`/feature flag）——回到 DEX 深挖。
+- **V3 失败**（nexuslauncher 注入被拒）→ 检查 LSPosed 作用域/黑名单，或改用 launcher3 变体。
+
+### 11.5 成功标准（严格）
+
+- ✅ 成功 = **气泡出现且可展开为悬浮窗**。
+- ❌ 不算成功 = 应用直接全屏打开（任务书禁止的"假成功"）、无反应、仅通知栏出现气泡。
+
+*文档结束 · PIXEL_PORT_AUDIT.md · 阶段 0 · 只读侦察 + DEX 核验 + 阶段 1 预研*

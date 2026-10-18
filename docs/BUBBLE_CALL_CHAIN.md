@@ -221,10 +221,10 @@ return true
 
 | 任务书问题 | 证据 | 结论 |
 |-----------|------|------|
-| 路线 A：`SystemUiProxy.showAppBubble` 能否接受任意 Intent | 仅验证过"Task baseIntent"来源；`(Intent, UserHandle, EntryPoint, null)` 四参含 null；方法按名匹配 | **待实测**。签名需 DEX 核验；null 第 4 参需确认 |
-| 路线 B：`BubbleController.expandStackAndSelectAppBubble` | `expandAppBubbleA17` 已构造 `Bubble(intent,user,icon,TYPE_APP,key)` 并传入 `(Bubble, EntryPoint, null)`，注释称与官方 `IBubblesImpl.showAppBubble` 配方一致 | **源码级配方存在**，但**签名未经目标 ROM DEX 确认**，注释自述"官方配方"需实证 |
-| `Bubble` 对象构造 | `new Bubble(Intent, UserHandle, Icon, Bubble$BubbleType.TYPE_APP, String key)` + `Bubble.getAppBubbleKeyForApp(pkg, user)` | 构造函数签名待 DEX 核验 |
-| 从手势选应用提交 → 气泡启动 | 两路径都**不以手势**触发；路径 S 以"通知"为载体验证了任意 Intent。手势 → 需构造 `BubbleLaunchRequest` → 走 `expandAppBubbleA17` 等价逻辑 | **移植需新增手势提交到后端的中介**（任务书阶段 2） |
+| 路线 A：`SystemUiProxy.showAppBubble` 能否接受任意 Intent | 仅验证过"Task baseIntent"来源；`(Intent, UserHandle, EntryPoint, BubbleBarLocation)` 四参含可空第 4 参；方法按名匹配 | **签名已 DEX 核验**（`SystemUiProxy.showAppBubble(Intent,UserHandle,EntryPoint,BubbleBarLocation)V`，Pixel Launcher 17）。**"任意 Intent"语义待实测**（阶段 1 V1） |
+| 路线 B：`BubbleController.expandStackAndSelectAppBubble` | `expandAppBubbleA17` 已构造 `Bubble(intent,user,icon,TYPE_APP,key)` 并传入 `(Bubble, EntryPoint, null)`，注释称与官方 `IBubblesImpl.showAppBubble` 配方一致 | **签名已 DEX 核验**（`expandStackAndSelectAppBubble(Bubble,EntryPoint,UpdateLocationRequest)V`，SystemUI 17），且方法体确认接受构造好的 `Bubble` 对象直接展开。端到端待真机 |
+| `Bubble` 对象构造 | `new Bubble(Intent, UserHandle, Icon, Bubble$BubbleType.TYPE_APP, String key)` + `Bubble.getAppBubbleKeyForApp(pkg, user)` | **构造函数签名已 DEX 核验**：`Bubble(Intent,UserHandle,Icon,BubbleType,String)V` + `getAppBubbleKeyForApp(String,UserHandle)String` |
+| 从手势选应用提交 → 气泡启动 | 两路径都**不以手势**触发；路径 S 以"通知"为载体验证了任意 Intent。手势 → 需构造 `BubbleLaunchRequest` → 走 `expandAppBubbleA17` 等价逻辑 | **移植需新增手势提交到后端的中介**（任务书阶段 2）；跨进程边界已实证（`SystemUiProxy.showAppBubble` 是 `IBubbles` AIDL transact） |
 
 ### 5.1 推荐采纳的调用链（供阶段 1 验证后确认）
 

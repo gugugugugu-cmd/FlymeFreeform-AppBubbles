@@ -60,22 +60,24 @@
 
 | 类 / 方法 | 存在性 | 签名证据 |
 |-----------|--------|---------|
-| `com.android.server.wm.FlexibleTaskController#systemReady(boolean)` | `<待核验>`（预期不存在） |  |
-| `com.android.server.wm.FlexibleTaskScaleManager#getGestureMode` | `<待核验>`（预期不存在） |  |
-| `com.android.server.wm.FlexibleCaptionView` | `<待核验>`（预期不存在） |  |
-| `com.android.quickstep.OplusBaseTouchInteractionService.onInputEventInternal` | `<待核验>`（预期不存在） |  |
-| `WMS.registerPointerEventListener(PointerEventListener, int)` | `<待核验>`（预期存在，AOSP） | 确认重载签名 2 参 vs 1 参 |
-| `WindowManagerPolicyConstants$PointerEventListener.onPointerEvent(MotionEvent)` | `<待核验>` | AOSP 标准 |
-| `com.android.systemui.SystemUIApplication` | `<待核验>` | AOSP 标准 |
-| `com.android.systemui.application.impl.SystemUIApplicationImpl` | `<待核验>`（预期不存在） | ColorOS 17 专属 |
-| `com.android.quickstep.SystemUiProxy#showAppBubble(...)` | `<待核验>` | 签名见 BUBBLE_CALL_CHAIN §6 |
-| `com.android.wm.shell.bubbles.BubbleController#expandStackAndSelectAppBubble(Bubble, EntryPoint, UpdateLocationRequest)` | `<待核验>` | A17 新签名 |
-| `com.android.wm.shell.bubbles.Bubble#(Intent, UserHandle, Icon, BubbleType, String)` | `<待核验>` | 构造函数 |
-| `com.android.wm.shell.bubbles.Bubble#getAppBubbleKeyForApp(String, UserHandle)` | `<待核验>` | static |
-| `com.android.wm.shell.bubbles.BubbleData#findAndRemoveBubbleFromOverflow(String)` | `<待核验>` |  |
-| `com.android.wm.shell.shared.bubbles.logging.EntryPoint`（含 `NOTIFICATION_BUBBLE_BUTTON`） | `<待核验>` | 枚举成员 |
-| `com.android.wm.shell.shared.bubbles.BubbleBarLocation$UpdateLocationRequest` | `<待核验>` | 可空性 |
-| `com.android.systemui.wmshell.BubblesManager` | `<待核验>` |  |
+| `com.android.server.wm.FlexibleTaskController#systemReady(boolean)` | ❌ 不存在（SystemUI 17 0 命中；framework.jar 层待系统镜像） | DEX 核验 |
+| `com.android.server.wm.FlexibleTaskScaleManager#getGestureMode` | ❌ 不存在（同上） | DEX 核验 |
+| `com.android.server.wm.FlexibleCaptionView` | ❌ 不存在（同上） | DEX 核验 |
+| `com.android.quickstep.OplusBaseTouchInteractionService.onInputEventInternal` | ❌ 不存在（SystemUI 17 0 命中） | DEX 核验 |
+| `WMS.registerPointerEventListener(PointerEventListener, int)` | ⚠️ 待核验（framework.jar 层，APK 不可核） | 真机反射验证（阶段 1） |
+| `WindowManagerPolicyConstants$PointerEventListener.onPointerEvent(MotionEvent)` | ⚠️ 待核验（同上） | 真机反射验证（阶段 1） |
+| `com.android.systemui.SystemUIApplication` | ✅ 存在（AOSP 标准，SystemUI 17） | DEX 核验 |
+| `com.android.systemui.application.impl.SystemUIApplicationImpl` | ❌ 不存在（ColorOS 17 专属） | DEX 核验 |
+| `com.android.quickstep.SystemUiProxy#showAppBubble(...)` | ✅ **存在** `(Intent, UserHandle, EntryPoint, BubbleBarLocation)V` | DEX 核验（Launcher 17） |
+| `com.android.wm.shell.bubbles.BubbleController#expandStackAndSelectAppBubble(Bubble, EntryPoint, UpdateLocationRequest)` | ✅ **存在** | DEX 核验（SystemUI 17） |
+| `com.android.wm.shell.bubbles.Bubble#(Intent, UserHandle, Icon, BubbleType, String)` | ✅ **存在** | DEX 核验（SystemUI 17） |
+| `com.android.wm.shell.bubbles.Bubble#getAppBubbleKeyForApp(String, UserHandle)` | ✅ **存在** `(String,UserHandle)String` | DEX 核验（SystemUI 17） |
+| `com.android.wm.shell.bubbles.BubbleData#findAndRemoveBubbleFromOverflow(String)` | ✅ **存在** `(String)Bubble` | DEX 核验（SystemUI 17） |
+| `com.android.wm.shell.shared.bubbles.logging.EntryPoint`（含 `NOTIFICATION_BUBBLE_BUTTON`） | ✅ **存在**（`NOTIFICATION`/`NOTIFICATION_BUBBLE_BUTTON`/`TASKBAR_ICON_DRAG`） | DEX 核验（SystemUI 17） |
+| `com.android.wm.shell.shared.bubbles.BubbleBarLocation$UpdateLocationRequest` | ✅ **存在** | DEX 核验（SystemUI 17） |
+| `com.android.systemui.wmshell.BubblesManager` | ⚠️ 待核验（该类在 SystemUI APK 中未单独 outline；经 `BubblesManager$Bubbles` 内类间接确认，低风险） | 阶段 1 outline |
+
+> **证据分级**：`✅ 存在` = DEX 核验（签名存在，L1）；`⚠️ 待核验` = framework.jar / system_server 层，APK 不可核（真机反射）；`❌ 不存在` = DEX 0 命中（但 framework.jar 层同名类不排除——已注明）。**"签名存在"≠"后端可用"**：L1 签名证据不代表 L3 端到端可用，阶段 1 真机验证前不得据此宣称功能可用。
 
 ---
 
