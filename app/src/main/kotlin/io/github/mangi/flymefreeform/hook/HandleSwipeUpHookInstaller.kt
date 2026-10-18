@@ -78,7 +78,7 @@ internal class HandleSwipeUpHookInstaller(
                 }
             module.log(Log.INFO, TAG, "HANDLE_SWIPE_UP_HOOK_INSTALLED")
         } catch (exception: ReflectiveOperationException) {
-            module.log(Log.WARN, TAG, "HANDLE_SWIPE_UP_TARGET_UNAVAILABLE", exception)
+            module.log(Log.WARN, TAG, "HANDLE_SWIPE_UP_TARGET_UNAVAILABLE reason=coloros-class-absent (AOSP 无此实现，非功能缺失)", exception)
         } catch (exception: LinkageError) {
             module.log(Log.WARN, TAG, "HANDLE_SWIPE_UP_TARGET_LINKAGE_FAILED", exception)
         }

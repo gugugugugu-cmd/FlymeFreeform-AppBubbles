@@ -156,7 +156,7 @@ internal class ColorOsSidebarClient(
                             .invoke(context, user, 0) as Context
                     val uid = ColorOsSidebarTarget.supportedUid(userContext)
                         ?: run {
-                            logFailure("SIDEBAR_TOOL_TARGET_UNAVAILABLE")
+                            logFailure("SIDEBAR_TOOL_TARGET_UNAVAILABLE reason=coloros-class-absent (AOSP 无此实现，非功能缺失)")
                             scheduleCatalogRetry(retry)
                             return@execute
                         }
@@ -217,7 +217,7 @@ internal class ColorOsSidebarClient(
                     .invoke(context, user, 0) as Context
             val uid = ColorOsSidebarTarget.supportedUid(userContext)
             if (uid == null) {
-                logFailure("SIDEBAR_TOOL_TARGET_UNAVAILABLE")
+                logFailure("SIDEBAR_TOOL_TARGET_UNAVAILABLE reason=coloros-class-absent (AOSP 无此实现，非功能缺失)")
                 return
             }
             val connection =

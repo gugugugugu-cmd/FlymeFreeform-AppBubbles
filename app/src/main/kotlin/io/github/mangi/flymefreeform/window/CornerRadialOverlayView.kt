@@ -403,6 +403,13 @@ internal class CornerRadialOverlayView(
                 animationsEnabled = animationsEnabled,
             )
             if (panelModeState.value) {
+                LaunchedEffect(Unit) {
+                    Log.i(
+                        "FlymeFreeformTool",
+                        "RADIAL_PANEL_SHOWN ms=${SystemClock.uptimeMillis()} " +
+                            "timeout=${PANEL_TIMEOUT_MS}ms",
+                    )
+                }
                 Box(
                     modifier =
                         Modifier
@@ -993,6 +1000,8 @@ internal class CornerRadialOverlayView(
 
     private fun requestDismiss() {
         if (dismissNotified || disposed) return
+        // 阶段 4 回归测试需要可观测点：区分「外部点击关闭」「超时关闭」「选中关闭」
+        Log.i("FlymeFreeformTool", "RADIAL_DISMISS_REQUESTED ms=${SystemClock.uptimeMillis()}")
         dismissNotified = true
         removeCallbacks(timeout)
         removeCallbacks(dismissFallback)

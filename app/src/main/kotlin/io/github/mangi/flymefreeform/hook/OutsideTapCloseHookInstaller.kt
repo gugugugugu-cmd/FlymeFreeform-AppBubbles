@@ -121,7 +121,7 @@ internal class OutsideTapCloseHookInstaller(
                 }
             module.log(Log.INFO, TAG, "OUTSIDE_TAP_INPUT_REGION_HOOK_INSTALLED")
         } catch (exception: ReflectiveOperationException) {
-            module.log(Log.WARN, TAG, "OUTSIDE_TAP_TARGET_UNAVAILABLE", exception)
+            module.log(Log.WARN, TAG, "OUTSIDE_TAP_TARGET_UNAVAILABLE reason=coloros-class-absent (AOSP 无此实现，非功能缺失)", exception)
         } catch (exception: LinkageError) {
             module.log(Log.WARN, TAG, "OUTSIDE_TAP_TARGET_LINKAGE_FAILED", exception)
         }
