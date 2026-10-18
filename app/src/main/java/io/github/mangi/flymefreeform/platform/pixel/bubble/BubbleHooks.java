@@ -1143,7 +1143,12 @@ final class BubbleHooks {
                 } catch (Throwable t) { this.log(Log.ERROR, "inject failed", t); }
                 return ret;
             });
-        } catch (Throwable t) { this.log(Log.ERROR, "Hook onFinishInflate: " + t.getMessage()); }
+        } catch (Throwable t) {
+            // 原实现三处 hook 共用一个 try：任一处类名/方法名不匹配，
+            // 后面两处（按钮点击分流、卡片菜单）就再也不会安装。
+            // 这里逐处隔离，坏一处不影响其余。
+            this.log(Log.ERROR, "Hook onFinishInflate: " + t.getMessage(), t);
+        }
 
         // Hook OverviewActionsView.onClick
         try {
@@ -1156,7 +1161,9 @@ final class BubbleHooks {
                 }
                 return chain.proceed();
             });
-        } catch (Throwable t) { this.log(Log.ERROR, "Hook onClick: " + t.getMessage()); }
+        } catch (Throwable t) {
+            this.log(Log.ERROR, "Hook onClick: " + t.getMessage(), t);
+        }
 
         // Hook TaskMenuView.addMenuOptions
         try {
@@ -1170,7 +1177,9 @@ final class BubbleHooks {
                 } catch (Throwable t) { this.log(Log.ERROR, "addBubbleMenuOption: " + t.getMessage()); }
                 return null;
             });
-        } catch (Throwable t) { this.log(Log.ERROR, "Hook addMenuOptions: " + t.getMessage()); }
+        } catch (Throwable t) {
+            this.log(Log.ERROR, "Hook addMenuOptions: " + t.getMessage(), t);
+        }
     }
 
     // ==================== 操作栏按钮 ====================
