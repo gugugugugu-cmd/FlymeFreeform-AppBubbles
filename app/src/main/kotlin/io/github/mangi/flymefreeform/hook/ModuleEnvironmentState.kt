@@ -124,6 +124,20 @@ internal class ModuleEnvironmentState(
             !settings.isPausedByEnvironment(landscape = !portrait, gameMode = gameModeActive)
     }
 
+    /**
+     * 一次性快照，供诊断日志使用。
+     *
+     * 每个子项都是 isModuleAllowed() / isGestureAllowed() 的组成条件，
+     * 打出来才能判断闸门究竟关在哪一项。
+     */
+    fun describe(): String {
+        val settings = configuration.snapshot
+        return "monitoring=$monitoring displayAvailable=$displayAvailable " +
+            "configAvailable=${configuration.isAvailable} enabled=${settings.enabled} " +
+            "gestureNav=$gestureNavigation keyguardLocked=$keyguardLocked " +
+            "gameMode=$gameModeActive portrait=$portrait"
+    }
+
     fun isGestureAllowed(refreshKeyguard: Boolean = false): Boolean {
         if (refreshKeyguard && keyguardRecheckNeeded) refreshKeyguardState()
         return isModuleAllowed() && gestureNavigation && !keyguardLocked

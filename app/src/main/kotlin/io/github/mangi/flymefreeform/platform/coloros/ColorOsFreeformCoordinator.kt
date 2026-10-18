@@ -206,8 +206,22 @@ internal class ColorOsFreeformCoordinator(
             settings.pinsSaved != lastSettings.pinsSaved ||
                 settings.pinnedComponents != lastSettings.pinnedComponents
         lastSettings = settings
-        if (environmentState.isGestureAllowed(refreshKeyguard = true) && (settings.leftCornerEnabled || settings.rightCornerEnabled)) {
+        // 诊断：把闸门条件逐项打出来。此前整个分支无日志，导致「READY 但没有 POINTER 行」
+        // 无法区分是条件不满足还是注册失败——真机排查为此多绕了两轮。
+        val gestureAllowed = environmentState.isGestureAllowed(refreshKeyguard = true)
+        val cornerEnabled = settings.leftCornerEnabled || settings.rightCornerEnabled
+        if (!gestureAllowed || !cornerEnabled) {
+            logger(
+                Log.INFO,
+                "SYSTEM_GESTURE_GATE_CLOSED gestureAllowed=$gestureAllowed cornerEnabled=$cornerEnabled " +
+                    "left=${settings.leftCornerEnabled} right=${settings.rightCornerEnabled} " +
+                    "env=${environmentState.describe()}",
+                null,
+            )
+        }
+        if (gestureAllowed && cornerEnabled) {
             val resuming = !pointerRegistered
+            logger(Log.INFO, "SYSTEM_GESTURE_GATE_OPEN resuming=$resuming", null)
             registerPointerListener()
             if (resuming || selectionChanged || !catalogSnapshot.matches(settings) || catalogSnapshot.radialApps.isEmpty()) {
                 appCatalog.refresh(settings, reloadApps = resuming || selectionChanged || catalogSnapshot.radialApps.isEmpty())
