@@ -211,9 +211,18 @@ internal class ColorOsFreeformCoordinator(
         val gestureAllowed = environmentState.isGestureAllowed(refreshKeyguard = true)
         val cornerEnabled = settings.leftCornerEnabled || settings.rightCornerEnabled
         if (!gestureAllowed || !cornerEnabled) {
+            // 把「最可能的原因」单独点名。此前 enabled=false（用户没开总开关）
+            // 埋在 env= 长串里，肉眼极难发现，真机排查为此多绕一轮。
+            val cause =
+                when {
+                    !settings.enabled -> "MODULE_DISABLED_IN_SETTINGS"
+                    !cornerEnabled -> "NO_CORNER_ENABLED"
+                    !environmentState.isModuleAllowed() -> "ENVIRONMENT_BLOCKED"
+                    else -> "GESTURE_NAV_OR_KEYGUARD"
+                }
             logger(
                 Log.INFO,
-                "SYSTEM_GESTURE_GATE_CLOSED gestureAllowed=$gestureAllowed cornerEnabled=$cornerEnabled " +
+                "SYSTEM_GESTURE_GATE_CLOSED cause=$cause gestureAllowed=$gestureAllowed cornerEnabled=$cornerEnabled " +
                     "left=${settings.leftCornerEnabled} right=${settings.rightCornerEnabled} " +
                     "env=${environmentState.describe()}",
                 null,
