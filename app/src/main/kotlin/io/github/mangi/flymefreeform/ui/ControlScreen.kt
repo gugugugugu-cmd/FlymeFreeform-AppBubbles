@@ -57,6 +57,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.github.mangi.flymefreeform.R
 import io.github.mangi.flymefreeform.config.ModulePreferences
+import io.github.mangi.flymefreeform.config.ModuleSettingsSnapshot
 import io.github.mangi.flymefreeform.config.TriggerShape
 import io.github.mangi.flymefreeform.framework.FrameworkConnectionIssue
 import io.github.mangi.flymefreeform.framework.FrameworkConnectionState
