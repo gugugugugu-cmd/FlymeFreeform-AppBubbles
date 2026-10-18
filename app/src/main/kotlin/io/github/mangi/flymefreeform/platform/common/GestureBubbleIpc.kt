@@ -161,9 +161,11 @@ internal object GestureBubbleIpcProtocol {
  */
 internal class GestureBubbleIpcClient(
     private val context: Context,
-    private val logger: (priority: Int, code: String, error: Throwable?) -> Unit,
+    logger: (priority: Int, code: String, error: Throwable?) -> Unit,
     private val timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
 ) : AppLaunchCommitter {
+
+    private val logger: (priority: Int, code: String, error: Throwable?) -> Unit = logger
 
     private val pending = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ArrayBlockingQueue<GestureBubbleIpcProtocol.Outcome>>()
     private var receiverRegistered = false
@@ -198,7 +200,8 @@ internal class GestureBubbleIpcClient(
      * @return false 仅代表 [Outcome.Rejected]（可回退）；超时/通道不可用时返回 false
      *         但会打出 `GESTURE_IPC_UNKNOWN` 诊断码——调用方需按该码区分是否回退。
      */
-    override fun commit(component: ComponentName): Boolean = submit(component) == Outcome.Accepted
+    override fun commit(component: ComponentName): Boolean =
+        submit(component) == GestureBubbleIpcProtocol.Outcome.Accepted
 
     /** 三分结果版本，供协调器决定是否回退。 */
     fun submit(component: ComponentName, userId: Int = 0): GestureBubbleIpcProtocol.Outcome {
@@ -235,9 +238,7 @@ internal class GestureBubbleIpcClient(
                 source = "radial-gesture",
             )
         intent.setPackage(SYSTEM_UI_PACKAGE)
-        if (android.os.Build.VERSION.SDK_INT >= 33) {
-            intent.addFlags(Intent.FLAG_RECEIVER_FROM_SHELL)
-        }
+        // 不使用 FLAG_RECEIVER_FROM_SHELL：它是隐藏常量，且 system_server 本身即受信任发送方。
         context.sendBroadcast(intent)
         logger(Log.INFO, "GESTURE_IPC_SENT id=$requestId target=${component.flattenToShortString()}", null)
     }

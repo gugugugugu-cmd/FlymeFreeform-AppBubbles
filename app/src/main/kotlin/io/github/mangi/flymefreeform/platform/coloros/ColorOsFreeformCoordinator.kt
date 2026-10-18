@@ -57,7 +57,17 @@ internal class ColorOsFreeformCoordinator(
      * 之所以在协调器内部构造而不是由 installer 注入：提交器必须用 system_server 的
      * Context 发广播，而 installer 拿不到该 Context。注入仅用于测试替身。
      */
-    private val committer: AppLaunchCommitter? = GestureBubbleIpcClient(context, logger),
+    private val injectedCommitter: AppLaunchCommitter? = null,
+
+    /**
+     * 实际使用的提交器：
+     *  - 注入了替身就用替身（测试）；
+     *  - 否则用系统级 IPC 客户端，**延迟构造**——它需要 `context`，
+     *    而 `context` 来自 systemServer，晚于本构造参数求值。
+     */
+    private val committer: AppLaunchCommitter by lazy {
+        injectedCommitter ?: GestureBubbleIpcClient(context, logger)
+    },
 ) : CornerRadialOverlayView.Listener {
     private val context = systemServer.context
     private val handler = Handler(Looper.getMainLooper())
