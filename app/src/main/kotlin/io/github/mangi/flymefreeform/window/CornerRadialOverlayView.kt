@@ -93,6 +93,8 @@ import kotlin.math.roundToInt
 internal class CornerRadialOverlayView(
     context: Context,
     private val listener: Listener,
+    /** 模块级日志出口；`android.util.Log` 在 LSPosed 模块进程内不进导出日志，必须走这条。 */
+    private val moduleLog: (String) -> Unit = {},
 ) : AbstractComposeView(context), LifecycleOwner, SavedStateRegistryOwner {
     interface Listener {
         fun onAppCommitted(entry: RadialAppEntry)
@@ -139,7 +141,13 @@ internal class CornerRadialOverlayView(
     private var dismissNotified = false
     private var disposed = false
     private var lastTickUptime = 0L
-    private val timeout = Runnable(::requestDismiss)
+
+    /** 关闭原因，仅用于回归日志区分「超时 / 外部点击 / 返回键 / 选中」四条路径。 */
+    private var dismissReason = "unknown"
+    private val timeout = Runnable {
+        dismissReason = "timeout"
+        requestDismiss()
+    }
     private val dismissFallback = Runnable(::completeRadialExit)
 
     override val lifecycle: Lifecycle
@@ -404,10 +412,8 @@ internal class CornerRadialOverlayView(
             )
             if (panelModeState.value) {
                 LaunchedEffect(Unit) {
-                    Log.i(
-                        "FlymeFreeformTool",
-                        "RADIAL_PANEL_SHOWN ms=${SystemClock.uptimeMillis()} " +
-                            "timeout=${PANEL_TIMEOUT_MS}ms",
+                    moduleLog(
+                        "RADIAL_PANEL_SHOWN ms=${SystemClock.uptimeMillis()} timeout=${PANEL_TIMEOUT_MS}ms",
                     )
                 }
                 Box(
@@ -417,6 +423,7 @@ internal class CornerRadialOverlayView(
                             .pointerInput(Unit) {
                                 awaitEachGesture {
                                     awaitFirstDown(requireUnconsumed = false)
+                                    dismissReason = "outside-tap"
                                     requestDismiss()
                                 }
                             },
@@ -728,6 +735,7 @@ internal class CornerRadialOverlayView(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (oldw != 0 && (oldw != w || oldh != h)) {
+            dismissReason = "size-changed"
             requestDismiss()
             return
         }
@@ -758,7 +766,10 @@ internal class CornerRadialOverlayView(
 
     private fun handleBack(event: KeyEvent): Boolean {
         if (!panelModeState.value || event.keyCode != KeyEvent.KEYCODE_BACK) return false
-        if (event.action == KeyEvent.ACTION_UP) requestDismiss()
+        if (event.action == KeyEvent.ACTION_UP) {
+            dismissReason = "back"
+            requestDismiss()
+        }
         return true
     }
 
@@ -947,6 +958,7 @@ internal class CornerRadialOverlayView(
 
     private fun dismissAnimated(pendingCommit: RadialAppEntry?) {
         if (dismissing || disposed) return
+        dismissReason = if (pendingCommit == null) "cancelled" else "selected"
         dismissing = true
         removeCallbacks(timeout)
         // @author bomo 取屏类工具不能截到扇形，但无需先等完200ms装饰动画；实际透明帧提交后才交接。
@@ -984,6 +996,7 @@ internal class CornerRadialOverlayView(
         val pendingCommit = exitRequestState.value?.pendingCommit
         exitRequestState.value = null
         if (pendingCommit == null) {
+            dismissReason = "exit-finished"
             requestDismiss()
         } else {
             dismissNotified = true
@@ -1001,7 +1014,7 @@ internal class CornerRadialOverlayView(
     private fun requestDismiss() {
         if (dismissNotified || disposed) return
         // 阶段 4 回归测试需要可观测点：区分「外部点击关闭」「超时关闭」「选中关闭」
-        Log.i("FlymeFreeformTool", "RADIAL_DISMISS_REQUESTED ms=${SystemClock.uptimeMillis()}")
+        moduleLog("RADIAL_DISMISS_REQUESTED reason=$dismissReason ms=${SystemClock.uptimeMillis()}")
         dismissNotified = true
         removeCallbacks(timeout)
         removeCallbacks(dismissFallback)

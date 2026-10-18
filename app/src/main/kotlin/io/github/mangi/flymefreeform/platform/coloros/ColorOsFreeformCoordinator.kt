@@ -548,7 +548,10 @@ internal class ColorOsFreeformCoordinator(
         val params = createOverlayParams(focusable = false)
         var view: CornerRadialOverlayView? = null
         try {
-            view = CornerRadialOverlayView(context, this)
+            view =
+                CornerRadialOverlayView(context, this) { code ->
+                    logger(Log.INFO, code, null)
+                }
             view.begin(
                 side = side,
                 catalog = catalogSnapshot,
