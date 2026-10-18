@@ -53,7 +53,12 @@ internal class PixelBubbleTestEntry(
         receiver =
             object : BroadcastReceiver() {
                 override fun onReceive(context: Context, intent: Intent) {
-                    if (intent.action != ACTION_TEST_LAUNCH_BUBBLE) return
+                    if (intent.action != ACTION_TEST_LAUNCH_BUBBLE &&
+                        intent.action != ACTION_TEST_LAUNCH_BUBBLE_LEGACY
+                    ) {
+                        return
+                    }
+                    module.log(Log.INFO, TAG, "PIXEL_BUBBLE_TEST_RECEIVED action=${intent.action}")
                     val component =
                         intent.getStringExtra(EXTRA_COMPONENT)
                             ?.let(ComponentName::unflattenFromString)
@@ -111,12 +116,13 @@ internal class PixelBubbleTestEntry(
             val cl = context.javaClass.classLoader ?: return
             val bubblesCls = cl.loadClass("com.android.systemui.wmshell.BubblesManager")
             // 构造器捕获（任意签名，命中即绑定）
+            var ctorHooked = 0
             for (ctor in bubblesCls.declaredConstructors) {
                 try {
                     module
                         .hook(ctor)
                         .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.PROTECTIVE)
-                        .setId("flymefreeform.bubbles_manager_ctor")
+                        .setId("flymefreeform.bubbles_manager_ctor_${ctorHooked}")
                         .intercept { chain ->
                             val result = chain.proceed()
                             try {
@@ -127,10 +133,27 @@ internal class PixelBubbleTestEntry(
                             }
                             result
                         }
-                    module.log(Log.INFO, TAG, "PIXEL_BUBBLE_BUBBLES_MANAGER_CTOR_HOOKED")
-                    break
+                    ctorHooked++
                 } catch (_: Throwable) {
                 }
+            }
+            module.log(Log.INFO, TAG, "PIXEL_BUBBLE_BUBBLES_MANAGER_CTOR_HOOKED count=$ctorHooked")
+            // 主动探测：BubblesManager 是否已有实例（hook 安装晚于构造时）
+            try {
+                for (f in bubblesCls.declaredFields) {
+                    if (java.lang.reflect.Modifier.isStatic(f.modifiers) && !f.type.isPrimitive) {
+                        try {
+                            f.isAccessible = true
+                            val inst = f.get(null)
+                            if (inst != null && inst.javaClass.name.contains("BubblesManager")) {
+                                module.log(Log.INFO, TAG, "PIXEL_BUBBLE_BUBBLES_MANAGER_STATIC_FOUND ${f.name}")
+                                bindWithRetry(inst)
+                            }
+                        } catch (_: Throwable) {
+                        }
+                    }
+                }
+            } catch (_: Throwable) {
             }
             // 事件回调捕获（兜底）
             for (m in bubblesCls.declaredMethods) {
@@ -163,6 +186,43 @@ internal class PixelBubbleTestEntry(
             }
         } catch (t: Throwable) {
             module.log(Log.WARN, TAG, "PIXEL_BUBBLE_BUBBLES_MANAGER_HOOK_FAILED ${t.message}")
+        }
+        installBubbleControllerCtorCapture()
+    }
+
+    /**
+     * hook BubbleController 构造函数直接捕获实例（比 BubblesManager 链更直接）。
+     * BubbleController 是 SystemUI 气泡核心，创建时必然走构造函数。
+     */
+    private fun installBubbleControllerCtorCapture() {
+        try {
+            val cl = context.javaClass.classLoader ?: return
+            val ctrlCls = cl.loadClass("com.android.wm.shell.bubbles.BubbleController")
+            var ctorHooked = 0
+            for (ctor in ctrlCls.declaredConstructors) {
+                try {
+                    module
+                        .hook(ctor)
+                        .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.PROTECTIVE)
+                        .setId("flymefreeform.bubble_controller_ctor_${ctorHooked}")
+                        .intercept { chain ->
+                            val result = chain.proceed()
+                            try {
+                                if (result != null && result.javaClass.name.contains("BubbleController")) {
+                                    launcher.setController(result)
+                                    module.log(Log.INFO, TAG, "PIXEL_BUBBLE_BUBBLE_CONTROLLER_CTOR_CAPTURED")
+                                }
+                            } catch (_: Throwable) {
+                            }
+                            result
+                        }
+                    ctorHooked++
+                } catch (_: Throwable) {
+                }
+            }
+            module.log(Log.INFO, TAG, "PIXEL_BUBBLE_BUBBLE_CONTROLLER_CTOR_HOOKED count=$ctorHooked")
+        } catch (t: Throwable) {
+            module.log(Log.WARN, TAG, "PIXEL_BUBBLE_BUBBLE_CONTROLLER_CTOR_FAILED ${t.message}")
         }
     }
 
