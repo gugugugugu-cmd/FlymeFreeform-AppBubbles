@@ -295,7 +295,7 @@ internal class ColorOsFreeformCoordinator(
             // 审查意见：参数个数相同不代表类型和语义相同；若三参方法的第三个参数
             // 不是 Boolean，反射调用会失败，而异常被捕获并不等于监听器已注册。
             val resolved =
-                resolvePointerRegistration(windowManagerService.javaClass)
+                resolvePointerRegistration(windowManagerService.javaClass, listenerInterface)
             if (resolved == null) {
                 val candidates =
                     windowManagerService.javaClass.declaredMethods
@@ -305,7 +305,8 @@ internal class ColorOsFreeformCoordinator(
                         }
                 logger(
                     Log.WARN,
-                    "SYSTEM_POINTER_LISTENER_NO_METHOD candidates=$candidates",
+                    "SYSTEM_POINTER_LISTENER_NO_METHOD " +
+                        "listener=${listenerInterface.name} candidates=$candidates",
                     null,
                 )
                 return
@@ -341,19 +342,37 @@ internal class ColorOsFreeformCoordinator(
      *
      * @return 方法 + 参数构造器；无精确匹配时返回 null。
      */
+    /**
+     * 解析 WMS 上的指针注册方法——按**完整参数类型**精确匹配。
+     *
+     * 此前用 `!params[0].isPrimitive` 排除首参，只说明它不是基本类型，
+     * 不能证明它就是 PointerEventListener；文档称"精确白名单"而实现更宽，
+     * 属于名实不符。这里改为与真实接口类做相等比较。
+     *
+     * 已确认形态：
+     *   1. (PointerEventListener)                    —— 旧版
+     *   2. (PointerEventListener, int)               —— Android 17 实机命中
+     *
+     * 不存在三参形态；不按参数个数猜传参。
+     */
     private fun resolvePointerRegistration(
         type: Class<*>,
+        listenerType: Class<*>,
     ): Pair<java.lang.reflect.Method, (Any) -> Array<Any?>>? {
-        val candidates = type.declaredMethods.filter { it.name == "registerPointerEventListener" }
+        val candidates =
+            type.declaredMethods.filter {
+                it.name == "registerPointerEventListener" &&
+                    it.parameterTypes.isNotEmpty() &&
+                    it.parameterTypes[0] == listenerType
+            }
         for (method in candidates) {
             val params = method.parameterTypes
             val builder =
                 when {
-                    params.size == 1 && !params[0].isPrimitive ->
-                        { listener: Any -> arrayOf<Any?>(listener) }
-                    params.size == 2 &&
-                        !params[0].isPrimitive &&
-                        params[1] == Int::class.javaPrimitiveType ->
+                    // (PointerEventListener)
+                    params.size == 1 -> { listener: Any -> arrayOf<Any?>(listener) }
+                    // (PointerEventListener, int)
+                    params.size == 2 && params[1] == Int::class.javaPrimitiveType ->
                         { listener: Any -> arrayOf<Any?>(listener, Display.DEFAULT_DISPLAY) }
                     else -> null
                 }
