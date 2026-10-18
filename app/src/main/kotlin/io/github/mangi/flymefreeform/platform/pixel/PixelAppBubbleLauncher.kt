@@ -62,7 +62,7 @@ internal class PixelAppBubbleLauncher(
         val ctl = controller ?: return BubbleLaunchResult.BackendUnavailable
 
         // 1. 请求校验（任务书：不默认 userId=0，非主用户明确拒绝）
-        if (request.userHandle.identifier != 0) {
+        if (request.userHandle.getIdentifier() != 0) {
             return BubbleLaunchResult.RequestValidationFailed
         }
         val component = request.component
@@ -140,7 +140,7 @@ internal class PixelAppBubbleLauncher(
                 ) ?: return false
 
             val data = findField(controller, "mBubbleData") ?: return false
-            val pkg = intent.`package` ?: return false
+            val pkg = intent.getPackage() ?: return false
 
             val keyForApp =
                 findMethod(bubbleCls, "getAppBubbleKeyForApp", String::class.java, UserHandle::class.java)
@@ -158,7 +158,7 @@ internal class PixelAppBubbleLauncher(
                     findMethod(controller.javaClass, "getPackageManagerForUser", Int::class.javaPrimitiveType, Context::class.java)
                         ?.let { m ->
                             try {
-                                m.invoke(null, user.identifier, dataCtx)
+                                m.invoke(null, user.getIdentifier(), dataCtx)
                             } catch (_: Throwable) {
                                 dataCtx.packageManager
                             }

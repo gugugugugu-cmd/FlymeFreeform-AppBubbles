@@ -8,6 +8,8 @@ import android.content.IntentFilter
 import android.os.UserHandle
 import android.util.Log
 import io.github.libxposed.api.XposedModule
+import io.github.mangi.flymefreeform.platform.common.BubbleLaunchRequest
+import io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult
 
 /**
  * 阶段 2 开发测试入口（不改手势 UI）。
@@ -71,18 +73,18 @@ internal class PixelBubbleTestEntry(
         module.log(Log.INFO, TAG, "PIXEL_BUBBLE_TEST_ENTRY_READY launcherAvailable=${launcher.isAvailable()}")
     }
 
-    private fun resultStateName(result: io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult): String =
+    private fun resultStateName(result: BubbleLaunchResult): String =
         when (result) {
-            is io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult.RequestValidationFailed -> "REQUEST_VALIDATION_FAILED"
-            is io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult.TargetResolutionFailed -> "TARGET_RESOLUTION_FAILED"
-            is io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult.BackendUnavailable -> "BACKEND_UNAVAILABLE"
-            is io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult.BubbleRequestSubmitted -> "BUBBLE_REQUEST_SUBMITTED"
-            is io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult.BubbleCreateFailed -> "BUBBLE_CREATE_FAILED"
-            is io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult.TaskLaunchFailed -> "TASK_LAUNCH_FAILED"
-            is io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult.ExpandFailed -> "EXPAND_FAILED"
-            is io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult.ResultUnknown -> "RESULT_UNKNOWN"
-            is io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult.FallbackLaunch -> "FALLBACK_LAUNCH"
-            is io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult.Failed -> "FAILED_${(this as io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult.Failed).diagnosticCode}"
+            BubbleLaunchResult.RequestValidationFailed -> "REQUEST_VALIDATION_FAILED"
+            BubbleLaunchResult.TargetResolutionFailed -> "TARGET_RESOLUTION_FAILED"
+            BubbleLaunchResult.BackendUnavailable -> "BACKEND_UNAVAILABLE"
+            BubbleLaunchResult.BubbleRequestSubmitted -> "BUBBLE_REQUEST_SUBMITTED"
+            BubbleLaunchResult.BubbleCreateFailed -> "BUBBLE_CREATE_FAILED"
+            BubbleLaunchResult.TaskLaunchFailed -> "TASK_LAUNCH_FAILED"
+            BubbleLaunchResult.ExpandFailed -> "EXPAND_FAILED"
+            BubbleLaunchResult.ResultUnknown -> "RESULT_UNKNOWN"
+            BubbleLaunchResult.FallbackLaunch -> "FALLBACK_LAUNCH"
+            is BubbleLaunchResult.Failed -> "FAILED_${result.diagnosticCode}"
         }
 
     companion object {
