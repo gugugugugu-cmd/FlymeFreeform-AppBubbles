@@ -171,6 +171,16 @@ internal class ColorOsFreeformCoordinator(
                 handler.post { applySettings(configuration.snapshot) }
             }
         }
+        // 关键：applySettings 原本只在 configuration.observe{} 回调里被调用。
+        // 开机若收不到配置推送，registerPointerListener() 永远不会执行，
+        // 表现为「协调器 READY 但没有任何 POINTER 日志、手势全无反应」。
+        // 启动时主动应用一次当前快照，让指针监听尽早挂上。
+        try {
+            applySettings(configuration.snapshot)
+            logger(Log.INFO, "SYSTEM_SETTINGS_APPLIED_ON_START", null)
+        } catch (t: Throwable) {
+            logger(Log.WARN, "SYSTEM_SETTINGS_APPLY_ON_START_FAILED", t)
+        }
         logger(Log.INFO, "SYSTEM_GESTURE_COORDINATOR_READY", null)
     }
 
@@ -658,6 +668,8 @@ internal class ColorOsFreeformCoordinator(
                     }
                 },
                 IntentFilter(SharedStateProtocol.ACTION_REQUEST_TOOLS),
+                // 模块 App 与 system_server 不同 UID，必须显式导出（API 34+ 强制要求）
+                Context.RECEIVER_EXPORTED,
             )
         } catch (exception: Exception) {
             logger(Log.WARN, "TOOL_REQUEST_RECEIVER_FAILED", exception)
@@ -690,6 +702,8 @@ internal class ColorOsFreeformCoordinator(
                     }
                 },
                 IntentFilter(SharedStateProtocol.ACTION_CONFIG_CHANGED),
+                // 同上：配置由模块 App 推送，跨 UID
+                Context.RECEIVER_EXPORTED,
             )
         } catch (exception: Exception) {
             logger(Log.WARN, "CONFIG_PUSH_RECEIVER_FAILED", exception)
