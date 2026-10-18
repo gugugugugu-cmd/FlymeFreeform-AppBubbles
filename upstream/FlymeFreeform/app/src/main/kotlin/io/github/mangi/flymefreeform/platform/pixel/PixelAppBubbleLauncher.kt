@@ -56,6 +56,26 @@ internal class PixelAppBubbleLauncher(
         return controller != null
     }
 
+    /**
+     * 从 BubblesManager 实例链捕获 BubbleController（阶段 1 验证过的路径）：
+     *   BubblesManager.mBubbles (IBubblesImpl) → this$0 → BubbleController
+     * SystemUI 事件回调（onUserChangedBubble / expandStackAndSelectBubble）的
+     * this 就是 BubblesManager；hook 到实例后调用本方法完成绑定。
+     */
+    fun bindFromBubblesManager(bubblesManager: Any) {
+        if (controller != null) return
+        try {
+            val bubblesImpl = findField(bubblesManager, "mBubbles") ?: return
+            val ctl = findField(bubblesImpl, "this\$0") ?: return
+            if (ctl.javaClass.name.contains("BubbleController")) {
+                controller = ctl
+                Log.i(TAG, "bindFromBubblesManager: controller bound")
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "bindFromBubblesManager failed: ${t.message}")
+        }
+    }
+
     override fun isAvailable(): Boolean = controller != null
 
     override fun launch(request: BubbleLaunchRequest): BubbleLaunchResult {
@@ -303,21 +323,28 @@ internal class PixelAppBubbleLauncher(
 
     /** 解析 BubbleController 实例：优先 localService，其次反射单例。 */
     private fun resolveBubbleController(): Any? {
-        // 尝试 WindowManagerShellCommand / ActivityTaskManager 路径太深，先用反射单例。
-        // BubbleController 是 SystemUI 内部类，通常通过
-        // com.android.wm.shell.ShellCommandHandler / BubbleController.INSTANCE 拿到。
+        // 路径 1：BubbleController.INSTANCE 静态单例（老版本存在）。
         val cl = context.javaClass.classLoader ?: return null
-        val candidates =
-            listOf(
-                "com.android.wm.shell.bubbles.BubbleController",
-            )
-        for (name in candidates) {
+        try {
+            val cls = cl.loadClass("com.android.wm.shell.bubbles.BubbleController")
+            val instanceField = cls.getDeclaredField("INSTANCE")
+            instanceField.isAccessible = true
+            val instance = instanceField.get(null) ?: return null
+            if (instance.javaClass.name.contains("BubbleController")) return instance
+        } catch (_: Throwable) {
+        }
+        // 路径 2：SystemUI LocalServices.getService(BubbleController)。
+        // SystemUI 的 LocalServices 在 com.android.systemui.shared.system（部分版本在
+        // com.android.systemui.Dependency 时代的 com.android.systemui.util 包）。
+        for (lsName in listOf(
+            "com.android.systemui.shared.system.LocalServices",
+            "com.android.systemui.util.concurrency.LocalServices",
+        )) {
             try {
-                val cls = cl.loadClass(name)
-                val instanceField = cls.getDeclaredField("INSTANCE")
-                instanceField.isAccessible = true
-                val instance = instanceField.get(null) ?: continue
-                if (instance.javaClass.name.contains("BubbleController")) return instance
+                val lsCls = cl.loadClass(lsName)
+                val getService = lsCls.getMethod("getService", Class::class.java)
+                val ctl = getService.invoke(null, cl.loadClass("com.android.wm.shell.bubbles.BubbleController"))
+                if (ctl != null) return ctl
             } catch (_: Throwable) {
             }
         }
