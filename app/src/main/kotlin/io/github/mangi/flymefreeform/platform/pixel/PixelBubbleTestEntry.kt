@@ -255,7 +255,11 @@ internal class PixelBubbleTestEntry(
      */
     private fun requireTestScopeEnabled(): Boolean =
         try {
-            SystemProperties.getBoolean(PROP_TEST_ENTRY, false)
+            // android.os.SystemProperties 是隐藏 API（compileSdk 无此符号），只能反射访问
+            val cls = Class.forName("android.os.SystemProperties")
+            val raw = cls.getMethod("get", String::class.java, String::class.java)
+                .invoke(null, PROP_TEST_ENTRY, "0") as? String
+            raw == "1" || raw.equals("true", ignoreCase = true)
         } catch (_: Throwable) {
             false
         }
@@ -274,6 +278,7 @@ internal class PixelBubbleTestEntry(
             BubbleLaunchResult.TargetResolutionFailed -> "TARGET_RESOLUTION_FAILED"
             BubbleLaunchResult.BackendUnavailable -> "BACKEND_UNAVAILABLE"
             BubbleLaunchResult.BubbleRequestSubmitted -> "BUBBLE_REQUEST_SUBMITTED"
+            BubbleLaunchResult.SubmissionTimeout -> "SUBMISSION_TIMEOUT"
             BubbleLaunchResult.BubbleCreateFailed -> "BUBBLE_CREATE_FAILED"
             BubbleLaunchResult.TaskLaunchFailed -> "TASK_LAUNCH_FAILED"
             BubbleLaunchResult.ExpandFailed -> "EXPAND_FAILED"
