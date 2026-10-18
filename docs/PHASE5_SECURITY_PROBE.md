@@ -273,3 +273,54 @@ adb shell su -c 'am broadcast -a io.github.mangi.flymefreeform.action.SECURITY_P
 
 再配合普通应用侧：普通应用带同 action 打一发，影子行**不应出现**——
 这一次是真正的对照，因为两侧都用同一个可观测点（`logcat`），不再跨通道比较。
+
+---
+
+## 15. 终止结论：现有探针设计测不出结论（2026-10-19）
+
+### 15.1 实测数据
+
+| 发送方 | am broadcast 输出 | logcat `FlymeFreeformIpc` |
+|---|---|---|
+| root（`su` 后） | `result=0` | **有** `IPC_ARRIVED` ×2 |
+| 普通 shell（未 `su`） | `result=0` | 无 |
+
+### 15.2 为什么这套设计测不出结论
+
+`dumpsys package com.android.shell` 显示：
+
+```
+android.permission.STATUS_BAR_SERVICE: granted=true
+```
+
+**shell 用户（uid 2000）本身就持有这个签名权限。**
+
+于是：
+
+- 「普通 shell 发不到」这条对照**不存在**——shell 和 root 都持有权限，
+  两者到达与否由别的原因决定（例如 `am broadcast` 自身不给 `result` 填值）
+- 探针能证明的只有「接收器注册正常、通道存在」，这部分是**有效证据**
+- 但它**证明不了**「无权限的第三方应用会被拦下」——这个测试里根本没有
+  一个无权限的发送方
+
+### 15.3 我在这里反复犯的同一个错误
+
+回顾整个阶段 5 安全验证，我连续四次把「验证」做成「观察不到的推断」：
+
+1. 夹具 instrumentation 形态 → 进程崩在 Application 构造
+2. 夹具 Activity 形态 → 类名错，且发送方日志不归 LSPosed 管
+3. 判据用「日志里没有 X」→ X 按设计就不该出现
+4. 探针用 shell 对照 → shell 本身就持有签名权限
+
+共同点：**每次都在挑一个「我方便观察的东西」当证据，而不是先确认
+「谁有资格做对照」。**
+
+### 15.4 收口
+
+- 探针代码（`PROBE_ACTION` + `IPC_ARRIVED` 影子日志）**保留**：
+  它有独立价值——证明了接收器注册正常，且首次打通了 logcat 侧观测
+- 安全结论**不记入阶段 5 验收**，改列阶段 6 或作为独立安全项：
+  需要一个**无任何签名权限的第三方 APK** 作发送方，其 logcat 与
+  SystemUI 的 `FlymeFreeformIpc` 同机可读，才能构成有效对照
+- `d8b04a8`（uid 判定告警）已回退：它建立在「uid 能区分权限」的错误前提上，
+  而普通广播的 `mSentFromUid` 恒为 -1，无法据此判断
