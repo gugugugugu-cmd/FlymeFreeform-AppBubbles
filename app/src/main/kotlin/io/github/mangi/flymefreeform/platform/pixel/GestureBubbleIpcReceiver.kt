@@ -90,12 +90,11 @@ internal class GestureBubbleIpcReceiver(
         }
 
     /**
-     * 读取广播发送方 uid。
+     * 仅用于日志的发送方 uid。
      *
-     * 方法名已用 android.jar (API 37) 经 `javap` 核对：
-     *   `public int getSentFromUid()` / `public String getSentFromPackage()`
-     * 曾误写为 `getSendingUid()`——该方法不存在，反射恒失败返回 -1，
-     * 导致所有请求被判不可信而拒绝（审查意见 P0）。
+     * 普通 `sendBroadcast` 不会填充 `mSentFromUid`，因此这里恒得 -1，
+     * **不可用于鉴权**。鉴权一律由注册时的 [GestureBubbleIpcProtocol.PERMISSION_SEND]
+     * 在分发阶段完成。
      */
     private fun sentFromUidOrUnknown(receiver: BroadcastReceiver): Int =
         try {
@@ -103,26 +102,6 @@ internal class GestureBubbleIpcReceiver(
         } catch (_: Throwable) {
             -1
         }
-
-    /**
-     * 双重校验：uid 与包名必须同时可信。
-     *
-     * uid 允许 root(0) / shell(2000, adb 调试) / system(1000, system_server)。
-     * 包名允许 null（老版本 API 不提供）或 "android"（system_server 的包名）。
-     * 拿不到 uid（-1）视为不可信，拒绝。
-     */
-    private fun isTrustedSender(receiver: BroadcastReceiver, uid: Int): Boolean {
-        val uidOk = uid == 0 || uid == android.os.Process.SHELL_UID || uid == android.os.Process.SYSTEM_UID
-        if (!uidOk) return false
-        val pkg =
-            try {
-                BroadcastReceiver::class.java.getMethod("getSentFromPackage").invoke(receiver) as? String
-            } catch (_: Throwable) {
-                null
-            }
-        // system_server 的发送包名是 "android"；shell/root 的 adb 广播包名为 null 或 "com.android.shell"
-        return pkg == null || pkg == GestureBubbleIpcProtocol.SYSTEM_SERVER_PACKAGE || pkg == "com.android.shell"
-    }
 
     private fun run(
         requestId: String,
@@ -188,8 +167,9 @@ internal class GestureBubbleIpcReceiver(
                 }
             // API 34+ 动态注册自定义广播必须显式声明导出状态，否则抛 SecurityException
             // （真机日志 GESTURE_IPC_RECEIVER_FAILED 即此原因）。
-            // 导出是必需的（发送方是 system_server，不同 UID），来源可信性由
-            // onReceive 内的 getSentFromUid/getSentFromPackage 双重校验保证。
+            // 导出是必需的（发送方是 system_server，不同 UID），
+            // 来源可信性由下面 requiredPermission 的框架级权限校验保证，
+            // **不是**由 onReceive 内的 getSentFromUid 保证（该 API 对普通广播恒为 -1）。
             val handler = android.os.Handler(looper)
             // 5 参重载 registerReceiver(receiver, filter, permission, scheduler, flags)
             // 同时满足：绑定独立线程 + 显式导出状态（签名经 android.jar javap 核对）

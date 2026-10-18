@@ -7,11 +7,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import io.github.mangi.flymefreeform.platform.common.FallbackLaunchResult
+import io.github.mangi.flymefreeform.platform.common.FallbackLauncher
 
 /** 每次提交都重新校验组件，并仅携带 ColorOS 自由窗参数启动，不退化为普通全屏启动。 */
 internal class ColorOsFreeformLauncher(
     private val context: Context,
-) {
+) : FallbackLauncher {
     fun launch(component: ComponentName): FreeformLaunchResult {
         if (!isLaunchable(component)) return FreeformLaunchResult.TargetUnavailable
 
@@ -31,6 +33,14 @@ internal class ColorOsFreeformLauncher(
             FreeformLaunchResult.Failed("FREEFORM_LAUNCH_START_FAILED", exception)
         }
     }
+
+    /** 被明确拒绝时的厂商回退：与 [launch] 同一路径，仅转换结果类型。 */
+    override fun launchFallback(component: ComponentName): FallbackLaunchResult =
+        when (val result = launch(component)) {
+            FreeformLaunchResult.Started -> FallbackLaunchResult.Started
+            FreeformLaunchResult.TargetUnavailable -> FallbackLaunchResult.TargetUnavailable
+            is FreeformLaunchResult.Failed -> FallbackLaunchResult.Failed(result.diagnosticCode, result.cause)
+        }
 
     private fun isLaunchable(component: ComponentName): Boolean =
         try {

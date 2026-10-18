@@ -33,6 +33,8 @@ import io.github.mangi.flymefreeform.gesture.GestureAction
 import io.github.mangi.flymefreeform.hook.ModuleEnvironmentState
 import io.github.mangi.flymefreeform.hook.ProcessConfiguration
 import io.github.mangi.flymefreeform.platform.common.AppLaunchCommitter
+import io.github.mangi.flymefreeform.platform.common.FallbackLaunchResult
+import io.github.mangi.flymefreeform.platform.common.FallbackLauncher
 import io.github.mangi.flymefreeform.platform.common.GestureBubbleIpcClient
 import io.github.mangi.flymefreeform.platform.common.GestureBubbleIpcProtocol
 import io.github.mangi.flymefreeform.platform.common.SystemServerAccess
@@ -58,6 +60,16 @@ internal class ColorOsFreeformCoordinator(
      * Context 发广播，而 installer 拿不到该 Context。注入仅用于测试替身。
      */
     private val injectedCommitter: AppLaunchCommitter? = null,
+    /**
+     * 明确拒绝（`Outcome.Rejected`）时的回退启动（审查意见 P1）。
+     *
+     * **必须按平台注入**：旧实现在协调器内硬编码 `ColorOsFreeformLauncher`，
+     * 导致 Pixel 上被明确拒绝后仍带着 ColorOS 的 `mZoomLaunchFlags` /
+     * `setLaunchWindowingMode(100)` 走厂商自由窗协议。现在由 installer 决定：
+     * AOSP 用 [io.github.mangi.flymefreeform.platform.pixel.PixelFallbackLauncher]（普通全屏）。
+     */
+    private val fallbackLauncher: FallbackLauncher =
+        ColorOsFreeformLauncher(systemServer.context),
 ) : CornerRadialOverlayView.Listener {
     private val context = systemServer.context
 
@@ -85,7 +97,6 @@ internal class ColorOsFreeformCoordinator(
     private val gestureEngine = CornerGestureEngine()
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
 
-    private val launcher = ColorOsFreeformLauncher(context)
     private val sidebar = ColorOsSidebarClient(context, handler, logger)
     @Volatile
     private var latestToolCatalog: String? = null
@@ -648,7 +659,7 @@ internal class ColorOsFreeformCoordinator(
      */
     private fun launchWithCommitter(component: ComponentName): FreeformLaunchResult {
         val injected = committer
-        if (injected == null) return launcher.launch(component)
+        if (injected == null) return runFallback(component)
         if (injected is GestureBubbleIpcClient) {
             return try {
                 injected.submit(component) { outcome -> onCommitOutcome(component, outcome) }
@@ -670,8 +681,31 @@ internal class ColorOsFreeformCoordinator(
         return if (accepted) {
             FreeformLaunchResult.Started
         } else {
-            logger(Log.INFO, "COMMITTER_REJECTED_FALLBACK ${component.flattenToShortString()}", null)
-            launcher.launch(component)
+            runFallback(component)
+        }
+    }
+
+    /**
+     * 执行平台回退并统一记录结果。
+     *
+     * 回退只在**明确拒绝**时发生；`Started` 只表示 `startActivity` 返回成功，
+     * 不代表窗口可见。「最近小窗」由调用方按各自语义决定是否 publish，
+     * 这里不重复记录，避免同一组件在一次手势里被写入两次。
+     */
+    private fun runFallback(component: ComponentName): FreeformLaunchResult {
+        logger(
+            Log.INFO,
+            "COMMITTER_FALLBACK ${fallbackLauncher.javaClass.simpleName} ${component.flattenToShortString()}",
+            null,
+        )
+        return when (val result = fallbackLauncher.launchFallback(component)) {
+            FallbackLaunchResult.Started -> FreeformLaunchResult.Started
+            FallbackLaunchResult.TargetUnavailable -> FreeformLaunchResult.TargetUnavailable
+            is FallbackLaunchResult.Failed ->
+                FreeformLaunchResult.Failed(
+                    result.diagnosticCode,
+                    result.cause ?: IllegalStateException("fallback failed without cause"),
+                )
         }
     }
 
@@ -688,8 +722,7 @@ internal class ColorOsFreeformCoordinator(
                 }
                 GestureBubbleIpcProtocol.Outcome.Rejected -> {
                     // 明确拒绝且可安全回退
-                    logger(Log.INFO, "COMMITTER_REJECTED_FALLBACK ${component.flattenToShortString()}", null)
-                    val fallback = launcher.launch(component)
+                    val fallback = runFallback(component)
                     if (fallback == FreeformLaunchResult.Started) publishRecentFreeform(component)
                 }
                 GestureBubbleIpcProtocol.Outcome.Unknown -> {

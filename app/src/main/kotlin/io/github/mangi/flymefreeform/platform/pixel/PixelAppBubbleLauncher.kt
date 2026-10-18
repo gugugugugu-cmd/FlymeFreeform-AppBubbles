@@ -336,6 +336,12 @@ internal class PixelAppBubbleLauncher(
             dbg("BUBBLE_A17 bubble fromOverflow=${bubbleWasFromOverflow} key=$key type=${bubble!!.javaClass.name}")
             expand.invoke(controller, bubble, entryPoint, null)
             // 观测：调用后数据模型状态（区分"没进模型"vs"进了没渲染"）
+            //
+            // 注意：这里的 expanded 读的是**数据模型**，不是窗口可见性。
+            // 审查意见 P1 要求区分「请求已提交 / 气泡已创建 / 窗口已展开」——
+            // 数据模型为 true 只能说明系统接受了展开请求，最终是否可见取决于
+            // BubbleStackView 的渲染，模块没有可靠的可见性回调可读。
+            // 因此日志里显式区分 BUBBLE_MODEL（模型态）与不可知的可见性。
             try {
                 val cnt = runCatching {
                     data.javaClass.getMethod("getBubbles").also { it.isAccessible = true }.invoke(data) as? List<*>
@@ -344,8 +350,8 @@ internal class PixelAppBubbleLauncher(
                     data.javaClass.getMethod("isExpanded").also { it.isAccessible = true }.invoke(data)
                 }.getOrNull()
                 dbg(
-                    "BUBBLE_A17 after-expand bubbles=${cnt?.size} expanded=$expanded " +
-                        "selected=${cnt?.any { it === bubble }}",
+                    "BUBBLE_MODEL bubbles=${cnt?.size} modelExpanded=$expanded " +
+                        "selected=${cnt?.any { it === bubble }} visibility=unknown",
                 )
             } catch (_: Throwable) {
             }

@@ -4,6 +4,8 @@ import android.util.Log
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.mangi.flymefreeform.platform.coloros.ColorOsFreeformCoordinator
+import io.github.mangi.flymefreeform.platform.coloros.ColorOsFreeformLauncher
+import io.github.mangi.flymefreeform.platform.pixel.PixelFallbackLauncher
 import io.github.mangi.flymefreeform.platform.common.SystemServerAccess
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -200,6 +202,15 @@ internal class SystemServerHookInstaller(
                 logger = { priority, code, throwable ->
                     module.log(priority, TAG, code, throwable)
                 },
+                // 审查意见 P1：回退策略必须跟入口走。
+                // 旧实现在协调器内硬编码 ColorOsFreeformLauncher，Pixel 被明确拒绝后
+                // 仍带 mZoomLaunchFlags / setLaunchWindowingMode(100) 走厂商协议。
+                fallbackLauncher =
+                    if (entry == "COLOROS") {
+                        ColorOsFreeformLauncher(access.context)
+                    } else {
+                        PixelFallbackLauncher(access.context)
+                    },
             ).start()
         } catch (exception: Throwable) {
             module.log(Log.ERROR, TAG, "SYSTEM_FREEFORM_COORDINATOR_FAILED entry=$entry", exception)
