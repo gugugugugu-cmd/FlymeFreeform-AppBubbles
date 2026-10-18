@@ -860,7 +860,10 @@ internal class ColorOsFreeformCoordinator(
             removeOverlay()
             return
         }
-        val view = overlay ?: return
+        val view = overlay ?: run {
+            logger(Log.WARN, "MORE_PANEL_NO_OVERLAY ignored", null)
+            return
+        }
         morePanelActive = true
         activeEnvironmentApproved = false
         gestureEngine.cancel()
@@ -890,7 +893,10 @@ internal class ColorOsFreeformCoordinator(
                 },
                 onClosed = { if (overlay === view) removeOverlay() },
             )
-        ) removeOverlay()
+        ) {
+            logger(Log.WARN, "MORE_PANEL_SIDEBAR_BUSY ignored (session already active)", null)
+            removeOverlay()
+        }
     }
 
     private fun showBuiltInMorePanel(view: CornerRadialOverlayView) {

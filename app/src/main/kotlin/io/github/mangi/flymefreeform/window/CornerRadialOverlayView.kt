@@ -144,8 +144,13 @@ internal class CornerRadialOverlayView(
 
     /** 关闭原因，仅用于回归日志区分「超时 / 外部点击 / 返回键 / 选中」四条路径。 */
     private var dismissReason = "unknown"
+    /**
+     * 兜底超时。面板阶段是「等用户」，手势阶段是「等输入」——后者先到不能冒充前者。
+     * 2026-10-18 e1 日志里出现 `PANEL_SHOWN → outside-tap 间隔 29ms`，
+     * 就是阶段 3 遗留的 5s 手势超时没被面板超时顶掉导致的。
+     */
     private val timeout = Runnable {
-        dismissReason = "timeout"
+        dismissReason = if (panelModeState.value) "panel-timeout" else "gesture-timeout"
         requestDismiss()
     }
     private val dismissFallback = Runnable(::completeRadialExit)
@@ -205,16 +210,14 @@ internal class CornerRadialOverlayView(
             requestedHeight = displayMetrics.heightPixels,
             safeInsets = OverlaySafeInsets(),
         )
-        removeCallbacks(timeout)
-        postDelayed(timeout, GESTURE_TIMEOUT_MS)
+        armGestureTimeout()
     }
 
     fun updateGesture(x: Float, y: Float): Int? {
         latestX = x
         latestY = y
         if (panelModeState.value || dismissing) return selectedIndex
-        removeCallbacks(timeout)
-        postDelayed(timeout, GESTURE_TIMEOUT_MS)
+        armGestureTimeout()
         updateGestureFromLatestPoint()
         return selectedIndex
     }
@@ -1003,6 +1006,11 @@ internal class CornerRadialOverlayView(
             removeCallbacks(timeout)
             listener.onAppCommitted(pendingCommit)
         }
+    }
+
+    private fun armGestureTimeout() {
+        removeCallbacks(timeout)
+        postDelayed(timeout, GESTURE_TIMEOUT_MS)
     }
 
     private fun resetPanelTimeout() {
