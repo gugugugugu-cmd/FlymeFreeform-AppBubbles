@@ -31,7 +31,7 @@
     <string name="module_enabled_summary_off">已关闭；模块保持无副作用</string>
     <string name="module_enabled_summary_waiting">连接框架后才能更改</string>
     <string name="module_enabled_summary_updating">正在写入框架配置</string>
-    <string name="module_enabled_summary_scope">补全所需作用域后才能更改</string>
+    <string name="module_enabled_summary_scope">部分作用域未授予，相关功能可能不可用（不影响其它设置）</string>
     <string name="left_corner_title">左下角手势</string>
     <string name="left_corner_summary">从左下角斜向内上滑呼出扇形菜单</string>
     <string name="right_corner_title">右下角手势</string>
