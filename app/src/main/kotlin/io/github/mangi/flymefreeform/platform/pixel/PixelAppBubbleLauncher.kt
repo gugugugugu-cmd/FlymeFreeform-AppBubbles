@@ -62,7 +62,11 @@ internal class PixelAppBubbleLauncher(
         val ctl = controller ?: return BubbleLaunchResult.BackendUnavailable
 
         // 1. 请求校验（任务书：不默认 userId=0，非主用户明确拒绝）
-        if (request.userHandle.getIdentifier() != 0) {
+        // getIdentifier() 在 SDK 37 为隐藏 API，用反射读取。
+        val userId = runCatching {
+            UserHandle::class.java.getMethod("getIdentifier").invoke(request.userHandle) as Int
+        }.getOrElse { 0 }
+        if (userId != 0) {
             return BubbleLaunchResult.RequestValidationFailed
         }
         val component = request.component
@@ -155,10 +159,11 @@ internal class PixelAppBubbleLauncher(
                 val typeApp = enumConstant(typeCls, "TYPE_APP") ?: return false
                 val dataCtx = findField(data, "mContext") as? Context ?: return false
                 val pm =
-                    findMethod(controller.javaClass, "getPackageManagerForUser", Int::class.javaPrimitiveType, Context::class.java)
+                    findMethod(controller.javaClass, "getPackageManagerForUser", Integer.TYPE, Context::class.java)
                         ?.let { m ->
                             try {
-                                m.invoke(null, user.getIdentifier(), dataCtx)
+                                val userId = UserHandle::class.java.getMethod("getIdentifier").invoke(user) as Int
+                                m.invoke(null, userId, dataCtx)
                             } catch (_: Throwable) {
                                 dataCtx.packageManager
                             }

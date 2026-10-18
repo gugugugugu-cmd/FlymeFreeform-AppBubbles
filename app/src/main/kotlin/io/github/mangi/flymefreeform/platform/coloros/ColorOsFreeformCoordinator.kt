@@ -503,10 +503,14 @@ internal class ColorOsFreeformCoordinator(
                 false
             }
             return if (accepted) FreeformLaunchResult.Started
-            else FreeformLaunchResult.Failed("COMMITTER_REJECTED", null)
+            else FreeformLaunchResult.Failed("COMMITTER_REJECTED", CommitterRejectedException(component.flattenToString()))
         }
         return launcher.launch(component)
     }
+
+    /** committer 拒绝提交时的哨兵异常（Failed.cause 为非空 Throwable）。 */
+    private class CommitterRejectedException(component: String) :
+        RuntimeException("committer rejected: $component")
 
     /**
      * Hook 进程的框架远端配置是只读的（实测 `edit()` 抛 `UnsupportedOperationException`），
