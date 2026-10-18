@@ -89,6 +89,12 @@ final class BubbleHooks {
         module.log(priority, TAG, message, throwable);
     }
 
+    /** 用固定错误码上报某一组 hook 没装上，避免整组静默消失、只留一条随意文案。 */
+    private void report(String code, Throwable throwable) {
+        Log.e(TAG, code + ": " + (throwable == null ? "n/a" : throwable.toString()));
+        this.log(Log.ERROR, code, throwable);
+    }
+
     private static Field findField(Class<?> type, String name) {
         for (Class<?> c = type; c != null; c = c.getSuperclass()) {
             try {
@@ -182,7 +188,10 @@ final class BubbleHooks {
                 } catch (Throwable t) { return true; }
             });
             this.log(Log.INFO, "Hooked shouldShowBubbleButton OK");
-        } catch (Throwable t) { this.log(Log.ERROR, "Hook shouldShowBubbleButton: " + t.getMessage()); }
+        } catch (Throwable t) {
+            this.log(Log.ERROR, "Hook shouldShowBubbleButton: " + t.getMessage());
+            this.report("SYSTEMUI_NOTIFICATION_BUBBLE_UNAVAILABLE", t);
+        }
 
         // 2. injectBubbleMetadata at bind time
         try {
@@ -1133,6 +1142,7 @@ final class BubbleHooks {
             // 后面两处（按钮点击分流、卡片菜单）就再也不会安装。
             // 这里逐处隔离，坏一处不影响其余。
             this.log(Log.ERROR, "Hook onFinishInflate: " + t.getMessage(), t);
+            this.report("LAUNCHER_ACTION_BAR_UNAVAILABLE", t);
         }
 
         // Hook OverviewActionsView.onClick
@@ -1148,6 +1158,7 @@ final class BubbleHooks {
             });
         } catch (Throwable t) {
             this.log(Log.ERROR, "Hook onClick: " + t.getMessage(), t);
+            this.report("LAUNCHER_ACTION_BAR_CLICK_UNAVAILABLE", t);
         }
 
         // Hook TaskMenuView.addMenuOptions
@@ -1164,6 +1175,7 @@ final class BubbleHooks {
             });
         } catch (Throwable t) {
             this.log(Log.ERROR, "Hook addMenuOptions: " + t.getMessage(), t);
+            this.report("LAUNCHER_TASK_MENU_UNAVAILABLE", t);
         }
     }
 

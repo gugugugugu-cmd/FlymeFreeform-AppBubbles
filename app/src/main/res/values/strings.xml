@@ -95,4 +95,5 @@
     <string name="bubble_action_bar_summary">在气泡小窗底部操作栏增加应用图标按钮</string>
     <string name="bubble_notification_icon_title">通知横幅气泡图标</string>
     <string name="bubble_notification_icon_summary">在非前台通知上显示小程序气泡入口</string>
+    <string name="bubble_scope_value">已开启 %1$d/3 项；改动后需重启桌面与 SystemUI</string>
 </resources>

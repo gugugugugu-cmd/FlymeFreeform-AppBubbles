@@ -74,25 +74,25 @@ class ModuleMain : XposedModule() {
             // @author bomo 原生浮标/区域监听在 :edgepanel；该进程只装原生输入拦截，不安装 UI 面板桥接。
             processName == ColorOsSidebarTarget.NATIVE_PROCESS_NAME && param.packageName == ColorOsSidebarTarget.PACKAGE_NAME -> {
                 hooksInstalled = true
-                NativeSidebarHookInstaller(this).install(param.classLoader)
+                installIndependently("NATIVE_SIDEBAR") { NativeSidebarHookInstaller(this).install(param.classLoader) }
             }
 
             processName == ColorOsSidebarTarget.PROCESS_NAME && param.packageName == ColorOsSidebarTarget.PACKAGE_NAME -> {
                 hooksInstalled = true
-                SidebarHookInstaller(this, settings).install(param.classLoader)
+                installIndependently("SIDEBAR") { SidebarHookInstaller(this, settings).install(param.classLoader) }
             }
 
             processName == PROCESS_SYSTEM_UI && param.packageName == PROCESS_SYSTEM_UI -> {
                 hooksInstalled = true
-                SystemUiHookInstaller(this, settings).install(param.classLoader)
-                installBubbleSystemUiHooks(this, param.classLoader, settings)
+                installIndependently("SYSTEMUI") { SystemUiHookInstaller(this, settings).install(param.classLoader) }
+                installIndependently("SYSTEMUI_BUBBLE") { installBubbleSystemUiHooks(this, param.classLoader, settings) }
             }
 
             processName == PROCESS_LAUNCHER && param.packageName == PROCESS_LAUNCHER ||
                 processName == PROCESS_LAUNCHER_PIXEL && param.packageName == PROCESS_LAUNCHER_PIXEL -> {
                 hooksInstalled = true
-                LauncherHookInstaller(this, settings).install(param.classLoader)
-                installBubbleLauncherHooks(this, param.classLoader, settings)
+                installIndependently("LAUNCHER") { LauncherHookInstaller(this, settings).install(param.classLoader) }
+                installIndependently("LAUNCHER_BUBBLE") { installBubbleLauncherHooks(this, param.classLoader, settings) }
             }
         }
     }
@@ -109,6 +109,20 @@ class ModuleMain : XposedModule() {
             param.processName == PROCESS_LAUNCHER_PIXEL ||
             param.processName == ColorOsSidebarTarget.NATIVE_PROCESS_NAME ||
             param.processName == ColorOsSidebarTarget.PROCESS_NAME
+
+    /**
+     * 独立安装一组 hook：任何一组抛异常都不影响其余组。
+     *
+     * 合并前两个模块各自独立加载；合并后如果它们的安装代码共用一条无保护的调用链，
+     * 一方失败就会把另一方的 hook 一起带走，表现为「某个模块的功能全部失效」。
+     */
+    private inline fun installIndependently(scope: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (throwable: Throwable) {
+            log(Log.ERROR, TAG, "HOOK_INSTALL_FAILED_$scope", throwable)
+        }
+    }
 
     private fun disableForConfigurationFailure(code: String, exception: RuntimeException) {
         configuration = null

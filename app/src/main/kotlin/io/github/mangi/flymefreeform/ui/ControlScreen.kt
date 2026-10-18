@@ -279,8 +279,22 @@ private fun BubbleCard(
             startAction =
                 { PreferenceIcon(Icons.Rounded.Category, state.canChangeSettings) },
         )
+        // 让用户一眼看出「设置里开着、功能却没反应」是配置没同步，而不是 hook 没装上。
+        Text(
+            text =
+                stringResource(
+                    R.string.bubble_scope_value,
+                    state.settings.bubbleEnabledCount(),
+                ),
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            style = MiuixTheme.textStyles.body2,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
     }
 }
+
+private fun ModuleSettingsSnapshot.bubbleEnabledCount(): Int =
+    listOf(bubbleTaskMenuEnabled, bubbleActionBarEnabled, bubbleNotificationIconEnabled).count { it }
 
 @Composable
 private fun WindowInteractionCard(
