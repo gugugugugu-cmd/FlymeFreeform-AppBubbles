@@ -235,6 +235,7 @@ internal class PixelAppBubbleLauncher(
             val findOverflow =
                 findMethod(dataCls, "findAndRemoveBubbleFromOverflow", String::class.java)
             var bubble = findOverflow?.invoke(data, key)
+            var bubbleWasFromOverflow = bubble != null
 
             if (bubble == null) {
                 val typeApp = enumConstant(typeCls, "TYPE_APP") ?: run { Log.w(TAG, "BUBBLE_A17 step7 miss")
@@ -277,7 +278,23 @@ internal class PixelAppBubbleLauncher(
                 ?: run { Log.w(TAG, "BUBBLE_A17 step10 miss")
                         return false }
 
+            Log.i(TAG, "BUBBLE_A17 bubble fromOverflow=${bubbleWasFromOverflow} key=$key type=${bubble!!.javaClass.name}")
             expand.invoke(controller, bubble, entryPoint, null)
+            // 观测：调用后数据模型状态（区分"没进模型"vs"进了没渲染"）
+            try {
+                val cnt = runCatching {
+                    data.javaClass.getMethod("getBubbles").also { it.isAccessible = true }.invoke(data) as? List<*>
+                }.getOrNull()
+                val expanded = runCatching {
+                    data.javaClass.getMethod("isExpanded").also { it.isAccessible = true }.invoke(data)
+                }.getOrNull()
+                Log.i(
+                    TAG,
+                    "BUBBLE_A17 after-expand bubbles=${cnt?.size} expanded=$expanded " +
+                        "selected=${cnt?.any { it === bubble }}",
+                )
+            } catch (_: Throwable) {
+            }
             return true
         } catch (t: Throwable) {
             Log.w(TAG, "BUBBLE_A17 failed: ${t.javaClass.simpleName}: ${t.message}", t)
