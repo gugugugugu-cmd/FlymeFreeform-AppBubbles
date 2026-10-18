@@ -58,7 +58,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.github.mangi.flymefreeform.R
 import io.github.mangi.flymefreeform.config.ModulePreferences
-import io.github.mangi.flymefreeform.config.OutsideTapCloseMode
 import io.github.mangi.flymefreeform.config.TriggerShape
 import io.github.mangi.flymefreeform.framework.FrameworkConnectionIssue
 import io.github.mangi.flymefreeform.framework.FrameworkConnectionState
@@ -102,7 +101,6 @@ internal fun ControlScreen(
     onTriggerVerticalDpChange: (Int) -> Unit,
     /** @author bomo 「全部」面板缩放百分比变更（设置界面滑条，热生效）。 */
     onPanelScaleChange: (Int) -> Unit,
-    onOutsideTapCloseModeChange: (OutsideTapCloseMode) -> Unit,
     onHandleSwipeUpToMiniEnabledChange: (Boolean) -> Unit,
     onPauseInLandscapeChange: (Boolean) -> Unit,
     onPauseInGameModeChange: (Boolean) -> Unit,
@@ -188,7 +186,6 @@ internal fun ControlScreen(
                     item(key = "window_interaction") {
                         WindowInteractionCard(
                             state = state,
-                            onOutsideTapCloseModeChange = onOutsideTapCloseModeChange,
                             onHandleSwipeUpToMiniEnabledChange =
                                 onHandleSwipeUpToMiniEnabledChange,
                         )
@@ -242,28 +239,9 @@ private fun EnvironmentCard(
 @Composable
 private fun WindowInteractionCard(
     state: FrameworkConnectionState,
-    onOutsideTapCloseModeChange: (OutsideTapCloseMode) -> Unit,
     onHandleSwipeUpToMiniEnabledChange: (Boolean) -> Unit,
 ) {
-    val modes = OutsideTapCloseMode.entries
-    val items =
-        listOf(
-            DropdownItem(text = stringResource(R.string.outside_tap_mode_disabled)),
-            DropdownItem(text = stringResource(R.string.outside_tap_mode_single)),
-            DropdownItem(text = stringResource(R.string.outside_tap_mode_double)),
-        )
     Card(modifier = Modifier.fillMaxWidth()) {
-        OverlaySpinnerPreference(
-            items = items,
-            selectedIndex = modes.indexOf(state.settings.outsideTapCloseMode),
-            title = stringResource(R.string.outside_tap_close_title),
-            summary = stringResource(R.string.outside_tap_close_summary),
-            enabled = state.canChangeSettings,
-            startAction = { PreferenceIcon(Icons.Rounded.TouchApp, state.canChangeSettings) },
-            onSelectedIndexChange = { index ->
-                modes.getOrNull(index)?.let(onOutsideTapCloseModeChange)
-            },
-        )
         SwitchPreference(
             checked = state.settings.handleSwipeUpToMiniEnabled,
             onCheckedChange = onHandleSwipeUpToMiniEnabledChange,

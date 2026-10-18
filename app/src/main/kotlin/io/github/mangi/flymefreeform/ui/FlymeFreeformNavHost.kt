@@ -10,7 +10,6 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import io.github.mangi.flymefreeform.apps.InstalledLauncherApp
-import io.github.mangi.flymefreeform.config.OutsideTapCloseMode
 import io.github.mangi.flymefreeform.config.TriggerShape
 import io.github.mangi.flymefreeform.framework.FrameworkConnectionState
 import kotlinx.serialization.Serializable
@@ -42,7 +41,6 @@ internal fun FlymeFreeformNavHost(
     onTriggerVerticalDpChange: (Int) -> Unit,
     /** @author bomo 「全部」面板缩放百分比变更。 */
     onPanelScaleChange: (Int) -> Unit,
-    onOutsideTapCloseModeChange: (OutsideTapCloseMode) -> Unit,
     onHandleSwipeUpToMiniEnabledChange: (Boolean) -> Unit,
     onPauseInLandscapeChange: (Boolean) -> Unit,
     onPauseInGameModeChange: (Boolean) -> Unit,
@@ -85,7 +83,6 @@ internal fun FlymeFreeformNavHost(
                         onTriggerHorizontalDpChange = onTriggerHorizontalDpChange,
                         onTriggerVerticalDpChange = onTriggerVerticalDpChange,
                         onPanelScaleChange = onPanelScaleChange,
-                        onOutsideTapCloseModeChange = onOutsideTapCloseModeChange,
                         onHandleSwipeUpToMiniEnabledChange =
                             onHandleSwipeUpToMiniEnabledChange,
                         onPauseInLandscapeChange = onPauseInLandscapeChange,

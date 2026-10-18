@@ -11,7 +11,6 @@ import io.github.mangi.flymefreeform.config.ConfigSnapshotCodec
 import io.github.mangi.flymefreeform.config.ModulePreferences
 import io.github.mangi.flymefreeform.config.SharedStateProtocol
 import io.github.mangi.flymefreeform.config.ModuleSettingsSnapshot
-import io.github.mangi.flymefreeform.config.OutsideTapCloseMode
 import io.github.mangi.flymefreeform.config.PinnedComponentCodec
 import io.github.mangi.flymefreeform.config.TriggerShape
 import java.util.IdentityHashMap
@@ -130,9 +129,6 @@ internal class FrameworkConnectionRepository(
                 panelScalePercent = ModulePreferences.coercePanelScalePercent(percent),
             )
         }
-
-    fun setOutsideTapCloseMode(mode: OutsideTapCloseMode) =
-        updateSettings { it.copy(outsideTapCloseMode = mode) }
 
     fun setHandleSwipeUpToMiniEnabled(enabled: Boolean) =
         updateSettings { it.copy(handleSwipeUpToMiniEnabled = enabled) }

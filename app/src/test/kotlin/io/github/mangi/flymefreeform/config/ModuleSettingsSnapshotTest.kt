@@ -35,7 +35,6 @@ class ModuleSettingsSnapshotTest {
         val snapshot = ModuleSettingsSnapshot.readFrom(InMemoryPreferences())
 
         assertEquals(84, snapshot.cornerTriggerRangeDp)
-        assertEquals(OutsideTapCloseMode.SingleTap, snapshot.outsideTapCloseMode)
         assertTrue(snapshot.handleSwipeUpToMiniEnabled)
         assertTrue(snapshot.pauseInLandscape)
         assertTrue(snapshot.pauseInGameMode)
@@ -63,13 +62,11 @@ class ModuleSettingsSnapshotTest {
     fun interactionSettingsRoundTrip() {
         val preferences = InMemoryPreferences()
         ModuleSettingsSnapshot(
-            outsideTapCloseMode = OutsideTapCloseMode.DoubleTap,
             handleSwipeUpToMiniEnabled = false,
         ).writeTo(preferences.edit()).commit()
 
         val restored = ModuleSettingsSnapshot.readFrom(preferences)
 
-        assertEquals(OutsideTapCloseMode.DoubleTap, restored.outsideTapCloseMode)
         assertFalse(restored.handleSwipeUpToMiniEnabled)
     }
 
@@ -106,17 +103,6 @@ class ModuleSettingsSnapshotTest {
 
         val allowBoth = defaults.copy(pauseInLandscape = false, pauseInGameMode = false)
         assertFalse(allowBoth.isPausedByEnvironment(landscape = true, gameMode = true))
-    }
-
-    @Test
-    fun unknownOutsideTapModeFailsClosed() {
-        val preferences =
-            InMemoryPreferences(ModulePreferences.KEY_OUTSIDE_TAP_CLOSE_MODE to 99)
-
-        assertEquals(
-            OutsideTapCloseMode.Disabled,
-            ModuleSettingsSnapshot.readFrom(preferences).outsideTapCloseMode,
-        )
     }
 
     @Test

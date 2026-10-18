@@ -22,7 +22,6 @@ internal object ModulePreferences {
     /** @author bomo 触发热区纵向高度（沿屏幕侧边，dp）；矩形 / 三角形使用。 */
     const val KEY_TRIGGER_VERTICAL_DP = "trigger_vertical_dp_v1"
     const val KEY_CORNER_PINS = "corner_pins_v1"
-    const val KEY_OUTSIDE_TAP_CLOSE_MODE = "outside_tap_close_mode_v1"
     const val KEY_HANDLE_SWIPE_UP_TO_MINI_ENABLED = "handle_swipe_up_to_mini_enabled"
     const val KEY_PAUSE_IN_LANDSCAPE = "pause_in_landscape"
     const val KEY_PAUSE_IN_GAME_MODE = "pause_in_game_mode"
@@ -53,7 +52,6 @@ internal object ModulePreferences {
     const val DEFAULT_ENABLED = false
     const val DEFAULT_CORNER_ENABLED = true
     const val DEFAULT_CORNER_TRIGGER_RANGE_DP = 84
-    val DEFAULT_OUTSIDE_TAP_CLOSE_MODE = OutsideTapCloseMode.SingleTap
     const val DEFAULT_HANDLE_SWIPE_UP_TO_MINI_ENABLED = true
     const val DEFAULT_PAUSE_IN_LANDSCAPE = true
     const val DEFAULT_PAUSE_IN_GAME_MODE = true

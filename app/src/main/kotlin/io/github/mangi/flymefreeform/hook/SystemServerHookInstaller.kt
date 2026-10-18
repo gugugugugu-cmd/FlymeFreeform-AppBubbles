@@ -39,7 +39,6 @@ internal class SystemServerHookInstaller(
         DiagnosticTracer.installHapticTrace(module) { priority, code, throwable ->
             module.log(priority, TAG, code, throwable)
         }
-        OutsideTapCloseHookInstaller(module, configuration, environment).install(classLoader)
         HandleSwipeUpHookInstaller(module, configuration, environment).install(classLoader)
 
         if (installColorOsEntry(classLoader)) return

@@ -22,8 +22,6 @@ internal data class ModuleSettingsSnapshot(
     val pinnedComponents: List<ComponentName> = emptyList(),
     val innerPinsSaved: Boolean = false,
     val innerPinnedComponents: List<ComponentName> = emptyList(),
-    val outsideTapCloseMode: OutsideTapCloseMode =
-        ModulePreferences.DEFAULT_OUTSIDE_TAP_CLOSE_MODE,
     val handleSwipeUpToMiniEnabled: Boolean =
         ModulePreferences.DEFAULT_HANDLE_SWIPE_UP_TO_MINI_ENABLED,
     val pauseInLandscape: Boolean = ModulePreferences.DEFAULT_PAUSE_IN_LANDSCAPE,
@@ -59,10 +57,6 @@ internal data class ModuleSettingsSnapshot(
             .putInt(
                 ModulePreferences.KEY_PANEL_SCALE_PERCENT,
                 ModulePreferences.coercePanelScalePercent(panelScalePercent),
-            )
-            .putInt(
-                ModulePreferences.KEY_OUTSIDE_TAP_CLOSE_MODE,
-                outsideTapCloseMode.storedValue,
             )
             .putBoolean(
                 ModulePreferences.KEY_HANDLE_SWIPE_UP_TO_MINI_ENABLED,
@@ -139,13 +133,6 @@ internal data class ModuleSettingsSnapshot(
                         ModulePreferences.DEFAULT_PANEL_SCALE_PERCENT,
                     ),
                 )
-            val outsideTapCloseMode =
-                OutsideTapCloseMode.fromStoredValue(
-                    preferences.getInt(
-                        ModulePreferences.KEY_OUTSIDE_TAP_CLOSE_MODE,
-                        ModulePreferences.DEFAULT_OUTSIDE_TAP_CLOSE_MODE.storedValue,
-                    ),
-                )
             val handleSwipeUpToMiniEnabled =
                 preferences.getBoolean(
                     ModulePreferences.KEY_HANDLE_SWIPE_UP_TO_MINI_ENABLED,
@@ -185,7 +172,6 @@ internal data class ModuleSettingsSnapshot(
                 panelScalePercent = panelScalePercent,
                 pinsSaved = pinsSaved,
                 pinnedComponents = pins,
-                outsideTapCloseMode = outsideTapCloseMode,
                 handleSwipeUpToMiniEnabled = handleSwipeUpToMiniEnabled,
                 pauseInLandscape = preferences.getBoolean(
                     ModulePreferences.KEY_PAUSE_IN_LANDSCAPE,
