@@ -69,28 +69,23 @@
 
 ---
 
-## 5. 执行步骤
+## 5. 执行步骤（e2）
 
 ```bash
-# 1. 安装夹具（无桌面图标，装完看不到是正常的）
-adb install -r FlymeFreeformForge-e1.apk
+# 1. 安装夹具（无桌面图标是正常的，从命令行启动）
+adb install -r FlymeFreeformForge-e2.apk
 
-# 2. 运行夹具
-adb shell am instrument -w \
-  io.github.mangi.flymefreeform.forge/android.test.InstrumentationTestRunner
+# 2. 启动夹具：它会立刻发三条探测广播，并在屏幕上逐条显示结果
+adb shell am start -n io.github.mangi.flymefreeform.forge/.forge.ForgeActivity
+# 也可以直接点桌面快捷方式（如果系统给它建了图标）
 
-# 3. 立刻在设备上正常触发一次角落手势（对照组）
+# 3. 立刻在设备上正常触发一次角落手势（对照组，必需）
 
 # 4. 导出模块日志，按 §4 判据核对
 ```
 
-无 ADB 时：夹具已声明 `functionalTest`，可在 LSPosed 管理器或系统
-「开发者选项 → 测试」里跑；最省事的仍是 ADB。
-
-夹具运行时会向 logcat 打 `FORGE_SENT` / `FORGE_BLOCKED`（`SendPermissionDeniedException`）/
-`FORGE_DELIVERED`，可作为辅助证据，但**不作为判据**——真正要看的是 SystemUI 侧。
-
----
+夹具界面会显示三行 `FORGE_COMMIT ...` 结果，作为辅助证据；
+**判据仍以 SystemUI 侧日志为准**——夹具进程说"发出去了"不算数。
 
 ## 6. 首次构建记录
 
@@ -99,7 +94,8 @@ adb shell am instrument -w \
 | forge-1 | `52b5475` | `39139933756` | 失败 | `build.gradle.kts` 注释吞掉闭合花括号 |
 | forge-2 | `26fdb5a` | `39140352695` | 失败 | 缺 `src/main/AndroidManifest.xml` |
 | forge-3 | `28261022` | `39140635062` | 失败 | `org.junit.Test` 无处解析（刻意不声明依赖） |
-| forge-4 | `b85bfa95` | `39140940590` | **成功** | 用例改 `test` 前缀，由 instrumentation 反射发现 |
+| forge-4 | `b85bfa95` | `39140940590` | 成功 | 用例改 `test` 前缀，由 instrumentation 反射发现 |
+| forge-5 | `ec5a1e7` | `39142367291` | **成功（e2）** | 改为独立 Activity，见 §8 |
 
 三次失败都在夹具自身的构建面，没有一次改动到模块主代码。
 
@@ -107,4 +103,54 @@ adb shell am instrument -w \
 
 ## 7. 结果
 
-待实机执行。
+e1（instrumentation 形态）在执行 `am instrument` 时崩溃，见 §8。
+e2（Activity 形态）待实机执行。
+
+---
+
+## 8. e1 失败复盘：`Process crashed`
+
+第一次实测：
+
+```
+# am instrument -w io.github.mangi.flymefreeform.forge/android.test.InstrumentationTestRunner
+INSTRUMENTATION_RESULT: shortMsg=Process crashed.
+```
+
+### 7.1 根因
+
+日志崩溃堆栈停在：
+
+```
+ZygoteInit.main → handleBindApplication → Instrumentation.newApplication
+```
+
+即**夹具进程在构造 Application 的阶段就挂了**，`onStart`/`onReceive` 一行都没执行。
+
+原因：`am instrument -w <pkg>/<runner>` 会把 **目标包的 `Application`** 加载进
+夹具进程，而夹具包的 `applicationId` 与主模块相同（`io.github.mangi.flymefreeform`）。
+主模块的 Xposed 入口（`@IXposedHookLoadPackage`）在 `initZygote` 之前就会调用
+`module.log(...)`，而该进程中 `module` 实例未被框架注入 → NPE。
+
+这不是 IPC 鉴权的问题，是**夹具宿主选错了**：用测试包去装一个「会被 hook 框架
+自动初始化」的应用。
+
+附带纠正一处误读：同一份日志里 `WeChatTablet` 的 `NoSuchMethodException`
+来自设备上另一个模块 `top.hookvip.wxtablet`，与本模块无关。
+
+### 7.2 修法
+
+夹具改成**独立 Activity**（`ForgeActivity`），不再声明 `<instrumentation>`：
+
+- 清单里只有一个 Activity，没有 `tools:ignore`、没有测试基础设施
+- 编译依赖仍然只有 `android.jar`（纯 Java，无 Kotlin、无 JUnit、无 androidx）
+- 应用启动即发三条探测广播，并在界面上逐条显示结果
+
+### 7.3 为什么换形态反而更好
+
+原来的 instrumentation 方案还有个隐患：`am instrument` 的输出只能证明
+**夹具进程自己认为发出去了**，而这一点是被测方无法验证的。
+改成普通 Activity 后，夹具进程和被测方（SystemUI）是两个完全独立的进程，
+发送方在自己的进程里，接收方的日志在另一个进程里——**证据链是分开的**，
+这比 instrumentation 里「同一个进程既发送又报告」要干净。
+
