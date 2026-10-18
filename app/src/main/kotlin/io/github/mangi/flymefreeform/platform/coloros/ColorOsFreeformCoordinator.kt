@@ -58,18 +58,18 @@ internal class ColorOsFreeformCoordinator(
      * Context 发广播，而 installer 拿不到该 Context。注入仅用于测试替身。
      */
     private val injectedCommitter: AppLaunchCommitter? = null,
+) : CornerRadialOverlayView.Listener {
+    private val context = systemServer.context
 
     /**
-     * 实际使用的提交器：
-     *  - 注入了替身就用替身（测试）；
-     *  - 否则用系统级 IPC 客户端，**延迟构造**——它需要 `context`，
-     *    而 `context` 来自 systemServer，晚于本构造参数求值。
+     * 实际使用的提交器（见构造参数注释）。
+     *
+     * 惰性构造：IPC 客户端需要 `context`，只能在 `context` 就绪后创建；
+     * 注入替身时优先生效，便于单元测试。
      */
     private val committer: AppLaunchCommitter by lazy {
         injectedCommitter ?: GestureBubbleIpcClient(context, logger)
-    },
-) : CornerRadialOverlayView.Listener {
-    private val context = systemServer.context
+    }
     private val handler = Handler(Looper.getMainLooper())
     private val catalogExecutor =
         ThreadPoolExecutor(
