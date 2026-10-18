@@ -47,6 +47,8 @@ internal class PixelBubbleTestEntry(
         val filter =
             IntentFilter().apply {
                 addAction(ACTION_TEST_LAUNCH_BUBBLE)
+                // 兼容历史文档命令（io.github.mangi.flymefreeform.ACTION_TEST_LAUNCH_BUBBLE）
+                addAction(ACTION_TEST_LAUNCH_BUBBLE_LEGACY)
             }
         receiver =
             object : BroadcastReceiver() {
@@ -118,8 +120,9 @@ internal class PixelBubbleTestEntry(
                         .intercept { chain ->
                             val result = chain.proceed()
                             try {
-                                // 构造器无 this，用返回值（新实例）绑定
-                                launcher.bindFromBubblesManager(result)
+                                // 构造器无 this，用返回值（新实例）绑定；
+                                // mBubbles 可能在构造后才赋值，延迟重试
+                                bindWithRetry(result)
                             } catch (_: Throwable) {
                             }
                             result
@@ -149,7 +152,7 @@ internal class PixelBubbleTestEntry(
                         .intercept { chain ->
                             val result = chain.proceed()
                             try {
-                                launcher.bindFromBubblesManager(chain.thisObject)
+                                bindWithRetry(chain.thisObject)
                             } catch (_: Throwable) {
                             }
                             result
@@ -161,6 +164,26 @@ internal class PixelBubbleTestEntry(
         } catch (t: Throwable) {
             module.log(Log.WARN, TAG, "PIXEL_BUBBLE_BUBBLES_MANAGER_HOOK_FAILED ${t.message}")
         }
+    }
+
+    /**
+     * 延迟重试绑定 controller：BubblesManager 构造后 mBubbles/this$0 可能尚未赋值，
+     * 用主线程 Handler 延迟重试（最多 20 次 × 500ms），确保链就绪。
+     */
+    private fun bindWithRetry(bubblesManager: Any) {
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        val attempts = java.util.concurrent.atomic.AtomicInteger(0)
+        val task =
+            object : Runnable {
+                override fun run() {
+                    if (launcher.isAvailable()) return
+                    launcher.bindFromBubblesManager(bubblesManager)
+                    if (!launcher.isAvailable() && attempts.incrementAndGet() < 20) {
+                        handler.postDelayed(this, 500L)
+                    }
+                }
+            }
+        handler.post(task)
     }
 
     private fun resultStateName(result: BubbleLaunchResult): String =
@@ -179,6 +202,8 @@ internal class PixelBubbleTestEntry(
 
     companion object {
         const val ACTION_TEST_LAUNCH_BUBBLE = "io.github.mangi.flymefreeform.action.TEST_LAUNCH_BUBBLE"
+        const val ACTION_TEST_LAUNCH_BUBBLE_LEGACY =
+            "io.github.mangi.flymefreeform.ACTION_TEST_LAUNCH_BUBBLE"
         const val EXTRA_COMPONENT = "component"
         const val EXTRA_USER_ID = "user_id"
         const val EXTRA_SOURCE = "source"
