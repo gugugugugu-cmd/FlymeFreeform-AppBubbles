@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    阶段 5 安全验证夹具（见 docs/PHASE5_SECURITY_PROBE.md）。
+
+    本模块只产出一个 APK，同时充当「宿主应用」与「instrumentation 目标」：
+    - 不声明任何 Activity / 服务 / 接收器 —— 安装后桌面无图标，也没有可被外部
+      拉起的组件面，纯粹是一个能在普通应用 UID 下执行代码的载体。
+    - <instrumentation> 指向平台自带的 android.test.InstrumentationTestRunner，
+      因此不依赖 androidx.test，也不需要额外 JUnit 依赖。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 夹具的唯一职责：以普通应用身份发广播。不需要任何权限 -->
+    <application
+        android:allowBackup="false"
+        android:label="FlymeFreeform Forge"
+        android:hasCode="true" />
+
+    <instrumentation
+        android:name="android.test.InstrumentationTestRunner"
+        android:targetPackage="io.github.mangi.flymefreeform.forge"
+        android:functionalTest="true" />
+
+</manifest>
