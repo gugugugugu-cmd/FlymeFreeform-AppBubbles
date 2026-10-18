@@ -151,7 +151,53 @@ e0 的 `RADIAL_PANEL_SHOWN` / `RADIAL_DISMISS_REQUESTED` 用
 - `reason=panel-timeout`（15s 无操作）未触发
 - 旋转 / 锁屏期间菜单表现未测
 
-## 7. 进度
+## 7. 审查整改（2026-10-18，暂不验收）
+
+审查结论：阶段 4 暂不验收通过，允许修复关键问题后进入补测。逐项处理如下。
+
+### 7.1 P1 明确拒绝后的回退仍走 ColorOS 自由窗 —— 已修
+
+原实现：`ColorOsFreeformCoordinator` 内硬编码 `private val launcher = ColorOsFreeformLauncher(context)`，
+`Outcome.Rejected` 分支调 `launcher.launch(component)`，即使入口是 AOSP。
+等于在 Pixel 上塞 `mZoomLaunchFlags=4` + `setLaunchWindowingMode(100)`。
+
+修复（commit `eff3310`）：
+
+| 文件 | 变更 |
+|---|---|
+| `platform/common/FallbackLauncher.kt` | 新增平台无关接口 + `FallbackLaunchResult` |
+| `platform/coloros/ColorOsFreeformLauncher.kt` | 实现接口，内部结果映射到公共类型 |
+| `platform/pixel/PixelFallbackLauncher.kt` | 新增：纯 `startActivity(intent)`，仅 `FLAG_ACTIVITY_NEW_TASK` |
+| `platform/coloros/ColorOsFreeformCoordinator.kt` | 回退改为构造注入 `fallbackLauncher` |
+| `hook/SystemServerHookInstaller.kt` | 按 `entry` 选择：COLOROS → ColorOS 实现，AOSP → Pixel 实现 |
+
+回退时统一打 `COMMITTER_FALLBACK <launcherClass> <component>`，实机可直接核对走的是哪条。
+
+新增 `PixelFallbackLauncherSourceTest`：源码级断言 Pixel 回退不出现
+`setLaunchWindowingMode` / `windowingMode` / `mZoomLaunchFlags` / `platform.coloros`。
+
+### 7.2 P1 IPC Accepted 不能作为气泡成功证据 —— 已补语义
+
+`BUBBLE_A17 after-expand expanded=...` 改为 `BUBBLE_MODEL ... visibility=unknown`，
+并在源码注释里写明：读的是 `BubbleData.isExpanded` 数据模型，不是渲染可见性。
+日志与文档不再暗示「Accepted = 气泡可见」。
+
+真正的可见性验收需要目视证据，见 `docs/logs/phase4/EVIDENCE.md` 末节。
+
+### 7.3 P2 测试证据不完整 —— 已补
+
+- 原始日志入库：`docs/logs/phase4/`（e0、e1）
+- 证据索引：`docs/logs/phase4/EVIDENCE.md`（构建 → commit → CI run → SHA-256 全表）
+
+### 7.4 P2 鉴权注释不一致 —— 已修
+
+`GestureBubbleIpcReceiver.isTrustedSender()` 已无人调用（阶段 3 改权限层鉴权后成了死代码），
+但其注释仍声称"由 getSentFromUid/getSentFromPackage 双重校验保证"。已删除该函数，
+注册处注释改为指向 `requiredPermission`，`sentFromUidOrUnknown()` 明确标注"仅用于日志、不可鉴权"。
+
+权限边界实测（普通应用伪造广播应被分发阶段拦截）仍列为本阶段待办。
+
+## 8. 进度
 
 - 2026-10-18：阶段 4 立项，盘点菜单实现现状，建立遗留项与回归清单
 - 2026-10-18：e0 构建；确认 `OUTSIDE_TAP` 为平台差异；三处告警加 reason
@@ -159,3 +205,5 @@ e0 的 `RADIAL_PANEL_SHOWN` / `RADIAL_DISMISS_REQUESTED` 用
   菜单日志改走模块 logger 并补 `reason`，SHA-256 `039e895b…42e6014`
 - 2026-10-18：e2 构建（commit `443ee22`，CI `39127321866` success），
   手势超时与面板超时隔离 + 面板旁路补日志，SHA-256 `fee26eef…e17d559`
+- 2026-10-18：e3 构建（commit `eff3310`，CI `39136511019` success），
+  审查 P1 回退按平台注入 + 鉴权注释清理 + 证据入库，SHA-256 `1faa34d5…ef8043a`
