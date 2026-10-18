@@ -54,15 +54,16 @@ internal class PixelBubbleTestEntry(
                 // 兼容历史文档命令（io.github.mangi.flymefreeform.ACTION_TEST_LAUNCH_BUBBLE）
                 addAction(ACTION_TEST_LAUNCH_BUBBLE_LEGACY)
             }
-        // 具名内部类：需要读取 getSendingUid()（API 34+），用反射调用以便低于 34 也能编译运行
+        // 具名内部类：需要读取发送方 uid / 包名，用反射调用以便低版本安全降级
         receiver =
             object : BroadcastReceiver() {
-                // BroadcastReceiver.getSendingUid() 为 API 34+ 的 public final 方法，
-                // 走反射以便在低版本上安全降级为「未知(-1)」。
-                private fun sendingUidOrUnknown(): Int =
+                // 方法名经 android.jar(API 37) javap 核对：
+                //   public int getSentFromUid() / public String getSentFromPackage()
+                // （曾误写 getSendingUid()，该方法不存在，反射恒失败 → 全部请求被拒）
+                private fun sentFromUidOrUnknown(): Int =
                     try {
                         BroadcastReceiver::class.java
-                            .getMethod("getSendingUid")
+                            .getMethod("getSentFromUid")
                             .invoke(this) as Int
                     } catch (_: Throwable) {
                         -1
@@ -75,7 +76,7 @@ internal class PixelBubbleTestEntry(
                         return
                     }
                     // 发送方 uid（Android 14+ 提供；低版本返回 -1 表示未知，按不可信处理）
-                    val senderUid = sendingUidOrUnknown()
+                    val senderUid = sentFromUidOrUnknown()
                     if (!isTrustedCaller(senderUid)) {
                         module.log(Log.WARN, TAG, "PIXEL_BUBBLE_TEST_REJECTED senderUid=$senderUid")
                         return
@@ -272,9 +273,12 @@ internal class PixelBubbleTestEntry(
      * 校验广播调用方：只接受 shell(2000) / root(0) / system(1000)。
      *
      * adb broadcast 的发送者 uid 是 2000（shell），普通三方 App 是其自身 uid，一律拒绝。
+     * 取不到 uid（-1）同样拒绝。
      */
     private fun isTrustedCaller(receiverUid: Int): Boolean =
-        receiverUid == 0 || receiverUid == 2000 || receiverUid == 1000
+        receiverUid == 0 ||
+            receiverUid == android.os.Process.SHELL_UID ||
+            receiverUid == android.os.Process.SYSTEM_UID
 
     private fun resultStateName(result: BubbleLaunchResult): String =
         when (result) {

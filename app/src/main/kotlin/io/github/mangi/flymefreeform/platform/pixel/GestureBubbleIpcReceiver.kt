@@ -55,9 +55,9 @@ internal class GestureBubbleIpcReceiver(
                 }
                 // 审查意见 P1：setPackage 只限目标包，不能证明来源可信。
                 // 读取发送方 uid，只接受 system_server(1000) / root(0)。
-                // getSendingUid() 是 API 34+ 方法，反射调用以便低版本降级为不可信。
-                val senderUid = sendingUidOrUnknown(this)
-                if (!isTrustedSender(senderUid)) {
+                // 方法名见 sentFromUidOrUnknown() 注释（已用 android.jar 核对）。
+                val senderUid = sentFromUidOrUnknown(this)
+                if (!isTrustedSender(this, senderUid)) {
                     log(Log.WARN, "GESTURE_IPC_REJECTED senderUid=$senderUid action=$action")
                     intent.getStringExtra(GestureBubbleIpcProtocol.EXTRA_REQUEST_ID)?.let {
                         GestureBubbleIpcProtocol.sendAck(
@@ -89,16 +89,40 @@ internal class GestureBubbleIpcReceiver(
             }
         }
 
-    private fun sendingUidOrUnknown(receiver: BroadcastReceiver): Int =
+    /**
+     * 读取广播发送方 uid。
+     *
+     * 方法名已用 android.jar (API 37) 经 `javap` 核对：
+     *   `public int getSentFromUid()` / `public String getSentFromPackage()`
+     * 曾误写为 `getSendingUid()`——该方法不存在，反射恒失败返回 -1，
+     * 导致所有请求被判不可信而拒绝（审查意见 P0）。
+     */
+    private fun sentFromUidOrUnknown(receiver: BroadcastReceiver): Int =
         try {
-            BroadcastReceiver::class.java.getMethod("getSendingUid").invoke(receiver) as Int
+            BroadcastReceiver::class.java.getMethod("getSentFromUid").invoke(receiver) as Int
         } catch (_: Throwable) {
-            // 低版本没有该 API：无法验证来源 → 按不可信处理
             -1
         }
 
-    /** system_server(1000) 与 root(0) 可信；其余（含未知 -1）一律拒绝。 */
-    private fun isTrustedSender(uid: Int): Boolean = uid == android.os.Process.SYSTEM_UID || uid == 0
+    /**
+     * 双重校验：uid 与包名必须同时可信。
+     *
+     * uid 允许 root(0) / shell(2000, adb 调试) / system(1000, system_server)。
+     * 包名允许 null（老版本 API 不提供）或 "android"（system_server 的包名）。
+     * 拿不到 uid（-1）视为不可信，拒绝。
+     */
+    private fun isTrustedSender(receiver: BroadcastReceiver, uid: Int): Boolean {
+        val uidOk = uid == 0 || uid == android.os.Process.SHELL_UID || uid == android.os.Process.SYSTEM_UID
+        if (!uidOk) return false
+        val pkg =
+            try {
+                BroadcastReceiver::class.java.getMethod("getSentFromPackage").invoke(receiver) as? String
+            } catch (_: Throwable) {
+                null
+            }
+        // system_server 的发送包名是 "android"；shell/root 的 adb 广播包名为 null 或 "com.android.shell"
+        return pkg == null || pkg == GestureBubbleIpcProtocol.SYSTEM_SERVER_PACKAGE || pkg == "com.android.shell"
+    }
 
     private fun run(
         requestId: String,
@@ -143,9 +167,17 @@ internal class GestureBubbleIpcReceiver(
         GestureBubbleIpcProtocol.sendAck(context, requestId, outcome)
     }
 
-    fun start() {
-        if (registered) return
-        registered = true
+    /**
+     * 注册接收器。
+     *
+     * 审查意见 P1：旧实现先置 `registered = true` 再注册，注册抛异常后永不重试。
+     * 现在只在成功后置位；失败时记录并允许下次调用重新尝试。
+     *
+     * @return true 表示已注册（本次或此前）。
+     */
+    @Synchronized
+    fun start(): Boolean {
+        if (registered) return true
         try {
             // 独立 HandlerThread：onReceive 不占 SystemUI 主线程
             val looper = android.os.HandlerThread("flyme-gesture-bubble-rx").apply { start() }.looper
@@ -153,9 +185,12 @@ internal class GestureBubbleIpcReceiver(
                 addAction(GestureBubbleIpcProtocol.ACTION_COMMIT)
                 addAction(GestureBubbleIpcProtocol.ACTION_COMMIT_FINALIZE)
             }, null, android.os.Handler(looper))
+            registered = true
             log(Log.INFO, "GESTURE_IPC_RECEIVER_READY")
+            return true
         } catch (t: Throwable) {
-            log(Log.WARN, "GESTURE_IPC_RECEIVER_FAILED ${t.javaClass.simpleName}: ${t.message}")
+            log(Log.WARN, "GESTURE_IPC_RECEIVER_FAILED ${t.javaClass.simpleName}: ${t.message}（下次将重试）")
+            return false
         }
     }
 

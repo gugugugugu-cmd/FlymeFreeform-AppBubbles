@@ -66,7 +66,13 @@ internal class SystemUiHookInstaller(
         try {
             PixelBubbleTestEntry(context, module).start()
             // system_server 的手势提交入口（跨进程）：扇形选中应用 → 本进程气泡后端
-            GestureBubbleIpcReceiver(context, module).start()
+            val ipcReady = GestureBubbleIpcReceiver(context, module).start()
+            // 注册失败时 start() 已记 GESTURE_IPC_RECEIVER_FAILED，这里补一条汇总便于抓日志
+            module.log(
+                if (ipcReady) Log.INFO else Log.WARN,
+                TAG,
+                "GESTURE_IPC_RECEIVER_REGISTERED=$ipcReady",
+            )
             module.log(Log.INFO, TAG, "PIXEL_BUBBLE_TEST_ENTRY_STARTED")
         } catch (exception: Throwable) {
             module.log(Log.WARN, TAG, "PIXEL_BUBBLE_TEST_ENTRY_START_FAILED", exception)
