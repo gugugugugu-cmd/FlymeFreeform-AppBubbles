@@ -146,34 +146,43 @@ internal class PixelAppBubbleLauncher(
         // 3. 提交：必须在 SystemUI 主线程执行（阶段 1 验证：controller.mMainExecutor 派发），
         //    广播线程直接调用会被 BubbleController 的线程断言/UI 校验吞掉。
         val mainExecutor = mainExecutorOf(ctl)
-        val work =
-            Runnable {
-                try {
-                    val done = expandAppBubbleA17(ctl, intent, user)
-                    if (!done) {
-                        val legacyDone = expandAppBubbleLegacy(ctl, intent, user)
-                        dbg("BUBBLE_EXPAND legacyDone=$legacyDone")
-                    }
-                } catch (t: Throwable) {
-                    dbgWarn("BUBBLE_EXPAND failed: ${t.javaClass.simpleName}: ${t.message}")
-                }
-            }
-        return try {
-            if (mainExecutor != null) {
-                mainExecutor.execute(work)
-                BubbleLaunchResult.BubbleRequestSubmitted
-            } else {
-                // 拿不到主线程执行器时退回直接调用（至少拿到诊断日志）
-                dbgWarn("BUBBLE_EXPAND no mMainExecutor, running inline")
-                val done = expandAppBubbleA17(ctl, intent, user)
-                if (done) BubbleLaunchResult.BubbleRequestSubmitted
-                else if (expandAppBubbleLegacy(ctl, intent, user)) BubbleLaunchResult.BubbleRequestSubmitted
-                else BubbleLaunchResult.ExpandFailed
-            }
-        } catch (t: Throwable) {
-            dbgWarn("launch failed: ${t.message}")
-            BubbleLaunchResult.ExpandFailed
+        if (mainExecutor == null) {
+            dbgWarn("BUBBLE_EXPAND no mMainExecutor, running inline")
+            return inlineExpand(ctl, intent, user)
         }
+        // 同步等待主线程执行结果（最多 2s），避免异步分支一律报 SUBMITTED 造成假成功。
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val okRef = java.util.concurrent.atomic.AtomicBoolean(false)
+        mainExecutor.execute {
+            try {
+                okRef.set(inlineExpand(ctl, intent, user))
+            } catch (t: Throwable) {
+                dbgWarn("BUBBLE_EXPAND failed: ${t.javaClass.simpleName}: ${t.message}")
+            } finally {
+                latch.countDown()
+            }
+        }
+        val finished = latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+        val ok = okRef.get()
+        dbg("BUBBLE_EXPAND main-thread finished=$finished ok=$ok")
+        return when {
+            !finished -> BubbleLaunchResult.BubbleRequestSubmitted
+            ok -> BubbleLaunchResult.BubbleRequestSubmitted
+            else -> BubbleLaunchResult.ExpandFailed
+        }
+    }
+
+    /** 真正的展开尝试（A17 优先，legacy 回退）。 */
+    private fun inlineExpand(
+        ctl: Any,
+        intent: Intent,
+        user: UserHandle,
+    ): Boolean {
+        val done = expandAppBubbleA17(ctl, intent, user)
+        if (done) return true
+        val legacyDone = expandAppBubbleLegacy(ctl, intent, user)
+        dbg("BUBBLE_EXPAND legacyDone=$legacyDone")
+        return legacyDone
     }
 
     /** BubbleController.mMainExecutor（HandlerExecutor）；取不到返回 null。 */
@@ -198,9 +207,12 @@ internal class PixelAppBubbleLauncher(
                     PackageManager.ComponentInfoFlags.of(0),
                 )
             if (!info.enabled || !info.applicationInfo.enabled || !info.exported) return null
+            // 必须显式 setPackage：Intent.setComponent 不会填充 getPackage()，
+            // 而 A17 配方第 4 步依赖 intent.getPackage() 取包名（真机日志 step4 miss）。
             Intent(Intent.ACTION_MAIN)
                 .addCategory(Intent.CATEGORY_LAUNCHER)
                 .setComponent(component)
+                .setPackage(component.packageName)
         } catch (_: PackageManager.NameNotFoundException) {
             null
         } catch (_: RuntimeException) {
