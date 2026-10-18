@@ -181,10 +181,29 @@ internal class GestureBubbleIpcReceiver(
         try {
             // 独立 HandlerThread：onReceive 不占 SystemUI 主线程
             val looper = android.os.HandlerThread("flyme-gesture-bubble-rx").apply { start() }.looper
-            context.registerReceiver(receiver, IntentFilter().apply {
-                addAction(GestureBubbleIpcProtocol.ACTION_COMMIT)
-                addAction(GestureBubbleIpcProtocol.ACTION_COMMIT_FINALIZE)
-            }, null, android.os.Handler(looper))
+            val filter =
+                IntentFilter().apply {
+                    addAction(GestureBubbleIpcProtocol.ACTION_COMMIT)
+                    addAction(GestureBubbleIpcProtocol.ACTION_COMMIT_FINALIZE)
+                }
+            // API 34+ 动态注册自定义广播必须显式声明导出状态，否则抛 SecurityException
+            // （真机日志 GESTURE_IPC_RECEIVER_FAILED 即此原因）。
+            // 导出是必需的（发送方是 system_server，不同 UID），来源可信性由
+            // onReceive 内的 getSentFromUid/getSentFromPackage 双重校验保证。
+            val handler = android.os.Handler(looper)
+            // 5 参重载 registerReceiver(receiver, filter, permission, scheduler, flags)
+            // 同时满足：绑定独立线程 + 显式导出状态（签名经 android.jar javap 核对）
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(
+                    receiver,
+                    filter,
+                    null,
+                    handler,
+                    android.content.Context.RECEIVER_EXPORTED,
+                )
+            } else {
+                context.registerReceiver(receiver, filter, null, handler)
+            }
             registered = true
             log(Log.INFO, "GESTURE_IPC_RECEIVER_READY")
             return true

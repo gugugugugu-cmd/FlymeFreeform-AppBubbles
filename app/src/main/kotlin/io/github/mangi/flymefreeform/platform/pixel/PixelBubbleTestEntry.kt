@@ -129,10 +129,19 @@ internal class PixelBubbleTestEntry(
         // 同步等待 —— 自己等自己，必然 SUBMISSION_TIMEOUT（审查意见 P0-2）。
         val looper = android.os.HandlerThread("flyme-bubble-test-rx").apply { start() }.looper
         val rxHandler = android.os.Handler(looper)
-        // 重载签名易混，统一用「带 flags」的版本（API 33+）：
-        //   registerReceiver(receiver, filter, flags: Int)
-        // 需要指定线程时用 registerReceiver(receiver, filter, receiverPermission, scheduler)。
-        context.registerReceiver(receiver, filter, null, rxHandler)
+        // 5 参重载（API 33+）：绑定独立线程 + 显式导出状态。
+        //   曾误用 4 参无 flags 版本 → Android 14+ 抛 SecurityException
+        if (Build.VERSION.SDK_INT >= 33) {
+            context.registerReceiver(
+                receiver,
+                filter,
+                null,
+                rxHandler,
+                Context.RECEIVER_EXPORTED,
+            )
+        } else {
+            context.registerReceiver(receiver, filter, null, rxHandler)
+        }
         module.log(Log.INFO, TAG, "PIXEL_BUBBLE_TEST_ENTRY_READY launcherAvailable=${launcher.isAvailable()}")
     }
 
