@@ -215,7 +215,7 @@ internal class PixelAppBubbleLauncher(
                 ) ?: return false
             val locCls =
                 runCatching { cl.loadClass("com.android.wm.shell.shared.bubbles.BubbleBarLocation") }
-                    .getOrNull()
+                    .getOrNull() ?: return false
             var expand =
                 findMethod(
                     controller.javaClass,

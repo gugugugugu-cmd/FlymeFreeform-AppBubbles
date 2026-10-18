@@ -55,10 +55,19 @@ internal class PixelBubbleTestEntry(
                     }
                     val userId = intent.getLongExtra(EXTRA_USER_ID, 0L).toInt()
                     val source = intent.getStringExtra(EXTRA_SOURCE) ?: "test-entry"
+                    // UserHandle.of(int) 在 SDK 37 为隐藏 API，用反射构造。
+                    val userHandle = runCatching {
+                        UserHandle::class.java.getMethod("of", Integer.TYPE)
+                            .invoke(null, userId) as UserHandle
+                    }.getOrNull()
+                    if (userHandle == null) {
+                        module.log(Log.WARN, TAG, "PIXEL_BUBBLE_TEST_USERHANDLE_REFLECT_FAILED", null)
+                        return
+                    }
                     val request =
                         BubbleLaunchRequest(
                             component = component,
-                            userHandle = UserHandle.of(userId),
+                            userHandle = userHandle,
                             source = source,
                         )
                     val result = launcher.launch(request)
