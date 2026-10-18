@@ -319,7 +319,7 @@ final class BubbleHooks {
                         Object provider = chain.getArg(0);
                         Object bubbleData = chain.getThisObject();
                         if (provider != null && provider.getClass().getName().endsWith("BubbleEntry")) {
-                            java.lang.reflect.Field f = this.findFieldSystemUi(bubbleData.getClass(), "mBubbles");
+                            java.lang.reflect.Field f = findField(bubbleData.getClass(), "mBubbles");
                             if (f != null) {
                                 f.setAccessible(true);
                                 java.util.List list = (java.util.List) f.get(bubbleData);
@@ -701,7 +701,7 @@ final class BubbleHooks {
 
     private void injectBubbleMetadata(Object entry, Notification notif) {
         try {
-            java.lang.reflect.Field metaField = this.findFieldSystemUi(entry.getClass(), "mBubbleMetadata");
+            java.lang.reflect.Field metaField = findField(entry.getClass(), "mBubbleMetadata");
             if (metaField == null) return;
             metaField.setAccessible(true);
             Object existing = metaField.get(entry);
@@ -754,8 +754,8 @@ final class BubbleHooks {
             return;
         } catch (Throwable ignored) {}
         try {
-            java.lang.reflect.Field f = this.findFieldSystemUi(notif.getClass(), "mBubbleMetadata");
-            if (f == null) f = this.findFieldSystemUi(notif.getClass(), "bubbleMetadata");
+            java.lang.reflect.Field f = findField(notif.getClass(), "mBubbleMetadata");
+            if (f == null) f = findField(notif.getClass(), "bubbleMetadata");
             if (f != null) {
                 f.setAccessible(true);
                 f.set(notif, metadata);
@@ -765,20 +765,6 @@ final class BubbleHooks {
         }
     }
 
-    private Object getField(Object obj, String name) {
-        try { java.lang.reflect.Field f = obj.getClass().getDeclaredField(name); f.setAccessible(true); return f.get(obj); }
-        catch (Throwable t) { return null; }
-    }
-    private Object invoke(Object obj, String method) {
-        try { java.lang.reflect.Method m = this.findMethodSystemUi(obj.getClass(), method); return m != null ? m.invoke(obj) : null; }
-        catch (Throwable t) { return null; }
-    }
-    private java.lang.reflect.Field findField(Class<?> c, String n) {
-        while (c != null) { try { return c.getDeclaredField(n); } catch (NoSuchFieldException e) { c = c.getSuperclass(); } } return null;
-    }
-    private java.lang.reflect.Method findMethod(Class<?> c, String n, Class<?>... p) {
-        while (c != null) { try { java.lang.reflect.Method m = c.getDeclaredMethod(n, p); m.setAccessible(true); return m; } catch (NoSuchMethodException e) { c = c.getSuperclass(); } } return null;
-    }
 
     // ===== 气泡小窗底部「关闭 / 全屏」双按钮改造 (Android 17 BubbleExpandedView) =====
 
@@ -873,8 +859,8 @@ final class BubbleHooks {
                 return;
             }
             android.view.ViewGroup.LayoutParams base = manage.getLayoutParams();
-            int width = base != null ? base.width : LayoutParams.WRAP_CONTENT;
-            int height = base != null ? base.height : LayoutParams.WRAP_CONTENT;
+            int width = base != null ? base.width : ViewGroup.LayoutParams.WRAP_CONTENT;
+            int height = base != null ? base.height : ViewGroup.LayoutParams.WRAP_CONTENT;
             FrameLayout.LayoutParams overlay = new FrameLayout.LayoutParams(width, height,
                     android.view.Gravity.END | android.view.Gravity.TOP);
             int top = manage.getTop();
@@ -929,8 +915,8 @@ final class BubbleHooks {
                     tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
                             ((android.widget.TextView) manageButton).getTextSize());
                 }
-                LayoutParams mp = manageButton.getLayoutParams();
-                if (mp != null) { cv.setLayoutParams(new LayoutParams(mp.width, mp.height)); }
+                ViewGroup.LayoutParams mp = manageButton.getLayoutParams();
+                if (mp != null) { cv.setLayoutParams(new ViewGroup.LayoutParams(mp.width, mp.height)); }
                 this.log(Log.INFO, "corner action: cloned AlphaOptimizedButton OK");
                 return cv;
             }
@@ -948,8 +934,8 @@ final class BubbleHooks {
                 b.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
                         ((android.widget.TextView) manageButton).getTextSize());
             }
-            LayoutParams mp = manageButton.getLayoutParams();
-            if (mp != null) { b.setLayoutParams(new LayoutParams(mp.width, mp.height)); }
+            ViewGroup.LayoutParams mp = manageButton.getLayoutParams();
+            if (mp != null) { b.setLayoutParams(new ViewGroup.LayoutParams(mp.width, mp.height)); }
             this.log(Log.INFO, "corner action: cloned generic Button OK");
             return b;
         } catch (Throwable genericErr) {
@@ -1224,7 +1210,7 @@ final class BubbleHooks {
         // 捕获 RecentsView（从 actionsParent 的 parent 链查找）
         if (this.recentsViewInstance == null) {
             try {
-                Class<?> rvCls = mLauncherClassLoader.loadClass(
+                Class<?> rvCls = classLoader.loadClass(
                         "com.android.quickstep.views.RecentsView");
                 View cur = actionsParent;
                 while (cur != null) {
@@ -1244,7 +1230,7 @@ final class BubbleHooks {
     }
 
     private boolean isClearAllButton(View child) {
-        try { return mLauncherClassLoader.loadClass("com.android.quickstep.views.ClearAllButton").isInstance(child); }
+        try { return classLoader.loadClass("com.android.quickstep.views.ClearAllButton").isInstance(child); }
         catch (Throwable t) { return false; }
     }
 
@@ -1365,7 +1351,7 @@ final class BubbleHooks {
 
     private boolean bubbleCurrentTask(Context ctx, Intent taskIntent, Object task, int userId) {
         try {
-            Class<?> proxyCls = mLauncherClassLoader.loadClass("com.android.quickstep.SystemUiProxy");
+            Class<?> proxyCls = classLoader.loadClass("com.android.quickstep.SystemUiProxy");
             Object ds = proxyCls.getField("INSTANCE").get(null);
             Object proxy = ds.getClass().getMethod("get", Context.class).invoke(ds, ctx.getApplicationContext());
             if (proxy == null) return false;
@@ -1384,10 +1370,10 @@ final class BubbleHooks {
                 }
             } catch (Throwable ignored) {}
 
-            Object userHandle = mLauncherClassLoader.loadClass("android.os.UserHandle")
+            Object userHandle = classLoader.loadClass("android.os.UserHandle")
                     .getMethod("of", int.class).invoke(null, userId);
 
-            Class<?> epCls = mLauncherClassLoader.loadClass("com.android.wm.shell.shared.bubbles.logging.EntryPoint");
+            Class<?> epCls = classLoader.loadClass("com.android.wm.shell.shared.bubbles.logging.EntryPoint");
             Object ep = null;
             for (Object e : (Object[]) epCls.getDeclaredField("$VALUES").get(null))
                 if ("NOTIFICATION".equals(e.toString())) { ep = e; break; }
@@ -1404,7 +1390,7 @@ final class BubbleHooks {
 
     private Object findRecentsViewFromHierarchy(View view) {
         try {
-            Class<?> rvCls = mLauncherClassLoader.loadClass("com.android.quickstep.views.RecentsView");
+            Class<?> rvCls = classLoader.loadClass("com.android.quickstep.views.RecentsView");
             // 先从 parent 链查找
             View cur = view;
             while (cur != null) {
