@@ -218,3 +218,58 @@ e2 里 Activity 类本身是对的（`package ...flymefreeform.forge;`），只�
 - [ ] 安装 `FlymeFreeformForge-e3.apk`，启动，截图三行结果
 - [ ] 导出模块日志，确认其中**没有** `SECURITY_PROBE_PASSED`
 - [ ] 顺带确认日志里能看到合法的 `GESTURE_IPC_RECEIVED`（证明日志管道是通的）
+
+---
+
+## 13. 夹具方案终止（2026-10-19）
+
+### 13.1 终止理由
+
+夹具外发广播**自己看不到自己的结果**：
+
+- 发送方是夹具进程，它的 `logcat` 输出**不属于 LSPosed 导出日志**，
+  设备侧也拿不到（终端里 `logcat -s ForgeBroadcast:*` 为空——见 §13.2）
+- 接收方是 SystemUI，被权限层拦下时按设计**零日志**
+
+两侧都没有痕迹，于是「没收到」与「没发出」永远不可区分。
+这不是判据写得不好，是**这个测试形态本身无法产生证据**。
+
+夹具模块 `androidTest/` 已从仓库移除（`settings.gradle.kts` 与 CI 同步清理）。
+
+### 13.2 顺带发现的严重问题：模块日志走的是私有通道
+
+设备侧 `logcat -s ForgeBroadcast:*` 无输出并不意外（夹具从未真正实现 logcat 输出），
+但同一轮里 SystemUI 侧的 `logcat` 也查不到本模块日志——因为
+`XposedModule.log()` 写的是 **LSPosed 自己的日志文件**，不走 `android.util.Log`，
+而我们的接收器全部通过 `XposedBridge.log()` 分派。
+
+**推论**：接收器在 `onReceive` 被调用的最早时刻，应当补一条 `android.util.Log`
+（TAG `FlymeFreeformIpc`）作为影子日志。这样任何广播只要到达
+`onReceive`，`logcat` 里一定看得到，不需要导出 LSPosed 日志。
+
+### 13.3 替代验证方案（已实现）
+
+给生产代码加一个**签名级调试入口**（不是测试口，不影响正常调用）：
+
+| | |
+|---|---|
+| action | `io.github.mangi.flymefreeform.action.SECURITY_PROBE` |
+| 权限 | 注册时 `requiredPermission = STATUS_BAR_SERVICE` |
+| 行为 | 收到后在 `onReceive` 打影子 logcat + `SECURITY_PROBE_REACHED` 模块日志 |
+| 暴露面 | 非导出 `debug` 组件；只有拿到签名权限的 system_server 能触发 |
+
+用 system_server 自己去打这一枪：
+
+```bash
+adb shell su -c 'am broadcast -a io.github.mangi.flymefreeform.action.SECURITY_PROBE'
+```
+
+判据：
+
+| logcat | 结论 |
+|---|---|
+| 有 `FlymeFreeformIpc` 影子行 | 注册链路正常，`requiredPermission` 生效 |
+| 完全没有 | 注册失败或未注册（另查 `GESTURE_IPC_RECEIVER_FAILED`） |
+
+再配合普通应用侧：普通应用带同 action 打一发，影子行**不应出现**——
+这一次是真正的对照，因为两侧都用同一个可观测点（`logcat`），不再跨通道比较。

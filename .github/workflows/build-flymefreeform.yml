@@ -49,8 +49,7 @@ jobs:
 
       - name: Build release (unsigned)
         # 不设置任何签名环境变量 → release keystore 为空 → 产出未签名 APK
-        # :androidTest 是阶段 5 的 IPC 安全验证夹具，独立模块，不进主 APK
-        run: ./gradlew assembleRelease :androidTest:assembleDebug --no-daemon --stacktrace
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Upload unsigned APK artifact
         uses: actions/upload-artifact@v4
@@ -58,5 +57,4 @@ jobs:
           name: FlymeFreeform-phase2-release
           path: |
             app/build/outputs/apk/release/*.apk
-            androidTest/build/outputs/apk/debug/*.apk
           if-no-files-found: error

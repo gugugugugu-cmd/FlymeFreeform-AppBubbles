@@ -48,6 +48,17 @@ internal class GestureBubbleIpcReceiver(
         object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
                 val action = intent?.action ?: return
+                // 先打到达性影子日志：能走到这一行，就说明这条 action 的分发已经
+                // 通过 requiredPermission 校验。放在 action 过滤之前是有意的——
+                // 探针 action 也要留下到达记录。
+                shadow(
+                    "IPC_ARRIVED action=$action id=${intent.getStringExtra(GestureBubbleIpcProtocol.EXTRA_REQUEST_ID)} " +
+                        "uid=${sentFromUidOrUnknown(this)}",
+                )
+                if (action == PROBE_ACTION) {
+                    log(Log.INFO, "SECURITY_PROBE_REACHED 权限分发校验通过（system_server 侧）")
+                    return
+                }
                 if (action != GestureBubbleIpcProtocol.ACTION_COMMIT &&
                     action != GestureBubbleIpcProtocol.ACTION_COMMIT_FINALIZE
                 ) {
@@ -173,6 +184,9 @@ internal class GestureBubbleIpcReceiver(
                 IntentFilter().apply {
                     addAction(GestureBubbleIpcProtocol.ACTION_COMMIT)
                     addAction(GestureBubbleIpcProtocol.ACTION_COMMIT_FINALIZE)
+                    // 安全验证入口：与真实指令同权限、同接收器，只多打一条到达记录。
+                    // 不需要它是独立接收器——共用这条链路才说明“注册链路本身”是通的。
+                    addAction(PROBE_ACTION)
                 }
             // API 34+ 动态注册自定义广播必须显式声明导出状态，否则抛 SecurityException
             // （真机日志 GESTURE_IPC_RECEIVER_FAILED 即此原因）。
@@ -212,7 +226,23 @@ internal class GestureBubbleIpcReceiver(
         module.log(priority, TAG, message)
     }
 
+    /**
+     * 影子日志：同时写 LSPosed 模块日志与系统 logcat。
+     *
+     * `XposedModule.log()` 只进 LSPosed 自己的日志文件，**不走 logcat**，
+     * 所以任何“广播到底有没有到达 onReceive”的排查都被锁在导出日志里。
+     * 这个入口只用于证明到达性，不进业务链路。
+     */
+    private fun shadow(message: String) {
+        runCatching { android.util.Log.i(SHADOW_TAG, message) }
+        log(Log.INFO, message)
+    }
+
     private companion object {
         const val TAG = "FlymeFreeform"
+        const val SHADOW_TAG = "FlymeFreeformIpc"
+
+        /** 只有持有 STATUS_BAR_SERVICE 的进程（system_server / SystemUI）能触发。 */
+        const val PROBE_ACTION = "io.github.mangi.flymefreeform.action.SECURITY_PROBE"
     }
 }
