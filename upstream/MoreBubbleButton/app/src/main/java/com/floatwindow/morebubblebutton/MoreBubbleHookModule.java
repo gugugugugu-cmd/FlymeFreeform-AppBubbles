@@ -6,6 +6,8 @@ import android.annotation.SuppressLint;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.LauncherActivityInfo;
+import android.content.pm.LauncherApps;
 import android.net.Uri;
 import android.os.IBinder;
 import android.os.Looper;
@@ -14,6 +16,7 @@ import android.os.UserHandle;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewGroup.LayoutParams;
 import android.view.ViewTreeObserver;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -59,6 +62,10 @@ public class MoreBubbleHookModule extends XposedModule {
     private ClassLoader mSystemUiClassLoader;
     private static final Map<String, Long> sForcedBubbleKeys = new ConcurrentHashMap<>();
     private static final long FORCED_BUBBLE_GRACE_MS = 8000L;
+
+    // The right corner action uses the official Bubble -> fullscreen handoff.
+    // No Bubble -> fullscreen transition is submitted, so SystemUI never rebuilds
+    // the edge bubble and its adjacent plus as a side effect.
 
     private void hookSystemUi(ClassLoader cl) {
         Log.i(TAG, "Hooking SystemUI...");
@@ -207,26 +214,6 @@ public class MoreBubbleHookModule extends XposedModule {
                         try {
                             int reason = (int) chain.getArg(0);
                             String key = (String) chain.getArg(keyArgIndex);
-                            if (reason == 3 && BubbleIconDoubleTap.consumeRecentOfficialConversion(key)) {
-                                Log.i(TAG, "defer fullscreen bubble cleanup reason=TASK_FINISHED key=" + key);
-                                Object owner = chain.getThisObject();
-                                final Method dismissMethod = dm;
-                                Object[] dismissArgs = new Object[dismissMethod.getParameterCount()];
-                                for (int i = 0; i < dismissArgs.length; i++) dismissArgs[i] = chain.getArg(i);
-                                final Object[] deferredArgs = dismissArgs;
-                                // BubbleData.dispatchPendingChanges touches PhysicsAnimationLayout, which
-                                // must run on the wmshell.main thread that created the bubble views.
-                                // The intercept itself runs on that thread, so use its Looper.
-                                android.os.Handler h = new android.os.Handler(Looper.myLooper());
-                                h.postDelayed(() -> {
-                                    try {
-                                        dismissMethod.invoke(owner, deferredArgs);
-                                    } catch (Throwable t) {
-                                        Log.w(TAG, "deferred fullscreen bubble cleanup failed", t);
-                                    }
-                                }, 220L);
-                                return null;
-                            }
                             if ((reason == 4 || reason == 7 || reason == 14) && isRecentlyForcedBubble(key)) {
                                 Log.i(TAG, "keep forced bubble: skip dismiss reason=" + reason + " key=" + key);
                                 return null;
@@ -266,10 +253,13 @@ public class MoreBubbleHookModule extends XposedModule {
             }
         } catch (Throwable t) { Log.w(TAG, "Hook select guard: " + t.getMessage()); }
 
-        // 7. 屏蔽气泡小窗底部「管理」按钮 (Android 17 BubbleExpandedView)
-        //    管理按钮在 onFinishInflate / updateManageButtonIfExists 中 inflate 并 bringChildToFront。
-        //    这里在重建后立刻置 GONE，并利用 mManageButton 空检查（if-nez 直接 return）
-        //    防止后续任何路径再次重建出可见按钮。
+        // 7. 改造气泡小窗底部「管理」按钮 (Android 17 BubbleExpandedView)：
+        //    不再屏蔽管理按钮，而是把它改造为两种动作按钮——
+        //    左下角官方 mManageButton 本体点击 = 「关闭小窗」(收起气泡回到贴边列表，不删除)；
+        //    在其右侧克隆一颗同款按钮，点击 = 「全屏展开」(moveTaskViewToFullscreen 反射链)。
+        //    官方 updateManageButtonIfExists 每次调用都会 inflate -> addView -> setVisibility
+        //    -> setOnClickListener -> post，因此 proceed 之后 mManageButton 已在 this 的 child 列表里，
+        //    可直接读取并重设；克隆按钮用横向容器挂到底部，保证一左一右。
         try {
             Class<?> bevCls = cl.loadClass("com.android.wm.shell.bubbles.BubbleExpandedView");
             hook(bevCls.getMethod("updateManageButtonIfExists")).intercept(chain -> {
@@ -279,72 +269,21 @@ public class MoreBubbleHookModule extends XposedModule {
                     f.setAccessible(true);
                     Object btn = f.get(chain.getThisObject());
                     if (btn instanceof View) {
-                        ((View) btn).setVisibility(View.GONE);
-                        Log.i(TAG, "Bubble manage button hidden");
+                        applyCornerButtonActions(chain.getThisObject(), (View) btn);
+                    } else {
+                        Log.w(TAG, "corner action: mManageButton not a View; skipped");
                     }
                 } catch (Throwable t) {
-                    Log.w(TAG, "hide manage button: " + t.getMessage());
+                    Log.w(TAG, "corner action install: " + t.getMessage(), t);
                 }
                 return result;
             });
-            Log.i(TAG, "Hooked BubbleExpandedView.updateManageButtonIfExists (hide manage btn) OK");
+            Log.i(TAG, "Hooked BubbleExpandedView.updateManageButtonIfExists (corner buttons) OK");
         } catch (Throwable t) { Log.e(TAG, "Hook manage button: " + t.getMessage()); }
-
-        // 8. Hide Android 17 BubbleOverflow's adjacent "+" icon.
-        // BubbleOverflow.getIconView() returns its overflow button; this view is
-        // re-inflated lazily on each call and re-added by several SystemUI paths,
-        // so hide it every time it is handed out (GONE + non-clickable + zero size).
-        // BubbleStackView.updateOverflowVisibility() re-sets it VISIBLE on every
-        // expand/collapse, so also force GONE after that official method runs.
-        try {
-            Class<?> overflowCls = cl.loadClass("com.android.wm.shell.bubbles.BubbleOverflow");
-            Method getOverflowIcon = findMethodSystemUi(overflowCls, "getIconView");
-            if (getOverflowIcon != null) {
-                hook(getOverflowIcon).intercept(chain -> {
-                    Object result = chain.proceed();
-                    if (result instanceof View) {
-                        View overflow = (View) result;
-                        overflow.setVisibility(View.GONE);
-                        overflow.setClickable(false);
-                        overflow.setEnabled(false);
-                        if (overflow.getLayoutParams() != null) {
-                            overflow.getLayoutParams().width = 0;
-                            overflow.getLayoutParams().height = 0;
-                        }
-                    }
-                    return result;
-                });
-                Log.i(TAG, "Hooked BubbleOverflow.getIconView (hide plus) OK");
-            } else {
-                Log.w(TAG, "BubbleOverflow.getIconView not found");
-            }
-            Class<?> stackCls = cl.loadClass("com.android.wm.shell.bubbles.BubbleStackView");
-            Method updOverflow = findMethodSystemUi(stackCls, "updateOverflowVisibility");
-            if (updOverflow != null) {
-                hook(updOverflow).intercept(chain -> {
-                    Object result = chain.proceed();
-                    try {
-                        Object overflow = getField(chain.getThisObject(), "mBubbleOverflow");
-                        if (overflow != null) {
-                            View btn = (View) getField(overflow, "overflowBtn");
-                            if (btn != null) {
-                                btn.setVisibility(View.GONE);
-                                btn.setClickable(false);
-                                btn.setEnabled(false);
-                            }
-                        }
-                    } catch (Throwable t) { Log.w(TAG, "updateOverflowVisibility hide plus: " + t.getMessage()); }
-                    return result;
-                });
-                Log.i(TAG, "Hooked BubbleStackView.updateOverflowVisibility (hide plus) OK");
-            }
-        } catch (Throwable t) { Log.w(TAG, "Hook BubbleOverflow plus: " + t.getMessage()); }
-
-        // 9. Only the verified classic application bubble icon click path.
-        new BubbleIconDoubleTap(this).install(cl);
 
         Log.i(TAG, "All SystemUI hooks installed");
     }
+
 
     private static boolean expandAppBubbleFromNotification(Object bubblesManager, Object entry, String reason) {
         try {
@@ -756,6 +695,354 @@ public class MoreBubbleHookModule extends XposedModule {
     }
     private static java.lang.reflect.Method findMethod(Class<?> c, String n, Class<?>... p) {
         while (c != null) { try { java.lang.reflect.Method m = c.getDeclaredMethod(n, p); m.setAccessible(true); return m; } catch (NoSuchMethodException e) { c = c.getSuperclass(); } } return null;
+    }
+
+    // ===== 气泡小窗底部「关闭 / 全屏」双按钮改造 (Android 17 BubbleExpandedView) =====
+
+    /** 标记我们克隆出来的右侧按钮，便于每次官方重建 mManageButton 时先清掉旧的克隆体。 */
+    private static final int CORNER_ROW_TAG = 0x4d4f5245; // "MORE"
+
+    /**
+     * 改造气泡小窗底部按钮：官方 mManageButton 留在原位（垂直 LinearLayout 的最后一个 child，
+     * 也就是左下角）只改文案与点击行为 = 「关闭小窗」；再克隆一颗同款按钮，用
+     * layout_gravity=end 挂在同一父容器里 = 右下角「展开小窗」。
+     *
+     * 关键：绝不把官方按钮搬离原父容器。官方 updateManageButtonIfExists 每次都会
+     * removeView+重新 inflate+addView，一旦我们把它移进自建容器，下一轮官方就把它摘走，
+     * 我们的容器里留下的是脱离视图树的旧实例 → 点击失效、行为错乱。
+     */
+    private static void applyCornerButtonActions(Object expandedView, View manageButton) {
+        try {
+            // The official method can reuse the same BubbleExpandedView while switching
+            // between an app bubble and the overflow drawer. Remove stale clones first.
+            removeCornerButtonClones(expandedView, manageButton);
+
+            // The overflow drawer has no task to close or expand. mIsOverflow is the
+            // primary flag; getBubbleKey() and mBubble cover builds where that flag is
+            // not updated before updateManageButtonIfExists() runs.
+            Object isOverflow = getField(expandedView, "mIsOverflow");
+            Object bubble = getField(expandedView, "mBubble");
+            Object bubbleKey = invoke(expandedView, "getBubbleKey");
+            if (Boolean.TRUE.equals(isOverflow)
+                    || "Overflow".equals(bubbleKey)
+                    || bubble == null) {
+                Log.i(TAG, "corner action: skip overflow drawer");
+                return;
+            }
+
+            // 左下角按钮复用“拖到底部关闭”的官方语义：USER_GESTURE。
+            // 不再调用 collapseStack()，否则只是贴边，随后 SystemUI 仍会重新展开该 Bubble。
+            if (manageButton instanceof android.widget.TextView) {
+                ((android.widget.TextView) manageButton).setText("关闭小窗");
+            }
+            manageButton.setOnClickListener(v -> dismissBubbleAsUserGesture(expandedView));
+            Log.i(TAG, "corner action: left manage button -> dismiss as USER_GESTURE");
+
+            // 右侧克隆同款按钮（右下角）：点击 = 该气泡任务全屏展开。
+            View clone = cloneManageButton(manageButton);
+            if (clone == null) {
+                Log.w(TAG, "corner action: clone button failed; only collapse button installed");
+                return;
+            }
+            if (clone instanceof android.widget.TextView) {
+                ((android.widget.TextView) clone).setText("展开小窗");
+            }
+            clone.setOnClickListener(v -> expandBubbleFullscreen(expandedView));
+            clone.setTag(CORNER_ROW_TAG, Boolean.TRUE);
+            addCloneBesideManageButton(expandedView, manageButton, clone);
+            Log.i(TAG, "corner action: cloned right button -> fullscreen");
+        } catch (Throwable t) {
+            Log.w(TAG, "corner action install failed: " + t.getMessage(), t);
+        }
+    }
+
+    /** Remove clones from either the expanded view or the manage button's parent. */
+    private static void removeCornerButtonClones(Object expandedView, View manage) {
+        java.util.ArrayList<ViewGroup> candidates = new java.util.ArrayList<>();
+        if (expandedView instanceof ViewGroup) candidates.add((ViewGroup) expandedView);
+        if (manage != null && manage.getParent() instanceof ViewGroup) {
+            ViewGroup parent = (ViewGroup) manage.getParent();
+            if (!candidates.contains(parent)) candidates.add(parent);
+        }
+        for (ViewGroup group : candidates) {
+            java.util.ArrayList<View> remove = new java.util.ArrayList<>();
+            for (int i = 0; i < group.getChildCount(); i++) {
+                View child = group.getChildAt(i);
+                if (Boolean.TRUE.equals(child.getTag(CORNER_ROW_TAG))) remove.add(child);
+            }
+            for (View child : remove) group.removeView(child);
+        }
+    }
+
+    /**
+     * Add the clone to the same parent without increasing the vertical stack height.
+     * Android 17's parent is vertical, so a normal addView puts the clone on a new
+     * row and below the visible window. Overlaying the clone at the manage button's
+     * top and aligning it to END keeps both controls in the existing bottom row.
+     */
+    private static void addCloneBesideManageButton(Object expandedView, View manage, View clone) {
+        try {
+            ViewGroup parent = manage != null && manage.getParent() instanceof ViewGroup
+                    ? (ViewGroup) manage.getParent()
+                    : (expandedView instanceof ViewGroup ? (ViewGroup) expandedView : null);
+            if (parent == null) {
+                Log.w(TAG, "corner action: no parent for clone; row not added");
+                return;
+            }
+            android.view.ViewGroup.LayoutParams base = manage.getLayoutParams();
+            int width = base != null ? base.width : LayoutParams.WRAP_CONTENT;
+            int height = base != null ? base.height : LayoutParams.WRAP_CONTENT;
+            FrameLayout.LayoutParams overlay = new FrameLayout.LayoutParams(width, height,
+                    android.view.Gravity.END | android.view.Gravity.TOP);
+            int top = manage.getTop();
+            if (top > 0) overlay.topMargin = top;
+            overlay.setMarginEnd(base instanceof LinearLayout.LayoutParams
+                    ? ((LinearLayout.LayoutParams) base).getMarginEnd() : 0);
+            if (parent instanceof FrameLayout) {
+                parent.addView(clone, overlay);
+            } else {
+                // A vertical LinearLayout cannot overlay children; use its existing
+                // height and pull the clone back onto the manage row.
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(width, height);
+                if (base instanceof LinearLayout.LayoutParams) {
+                    LinearLayout.LayoutParams mlp = (LinearLayout.LayoutParams) base;
+                    lp.setMarginStart(mlp.getMarginStart());
+                    lp.setMarginEnd(mlp.getMarginEnd());
+                    lp.bottomMargin = mlp.bottomMargin;
+                    lp.topMargin = -(height > 0 ? height : manage.getMeasuredHeight());
+                } else {
+                    lp.topMargin = -(height > 0 ? height : manage.getMeasuredHeight());
+                }
+                lp.gravity = android.view.Gravity.END;
+                parent.addView(clone, lp);
+                // The clone is measured after insertion. Correct its baseline once
+                // the official button has a real laid-out position.
+                clone.post(() -> {
+                    int delta = manage.getTop() - clone.getTop();
+                    if (delta != 0) clone.setTranslationY(delta);
+                });
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "corner action: add clone failed: " + t.getMessage(), t);
+        }
+    }
+
+    /** 复制 mManageButton：优先用官方 AlphaOptimizedButton 实例，克隆背景/文案/等宽；否则用按钮通用拷贝。 */
+    private static View cloneManageButton(View manageButton) {
+        try {
+            Context ctx = manageButton.getContext();
+            ClassLoader cl = ctx.getClassLoader();
+            Class<?> aob = cl.loadClass("com.android.wm.shell.AlphaOptimizedButton");
+            Object cloned = aob.getConstructor(Context.class).newInstance(ctx);
+            if (cloned instanceof View) {
+                View cv = (View) cloned;
+                cv.setBackground(manageButton.getBackground());
+                CharSequence text = manageButton instanceof android.widget.TextView
+                        ? ((android.widget.TextView) manageButton).getText() : null;
+                if (text != null && (cv instanceof android.widget.TextView)) {
+                    android.widget.TextView tv = (android.widget.TextView) cv;
+                    tv.setText(text);
+                    tv.setTextColor(((android.widget.TextView) manageButton).getTextColors());
+                    tv.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                            ((android.widget.TextView) manageButton).getTextSize());
+                }
+                LayoutParams mp = manageButton.getLayoutParams();
+                if (mp != null) { cv.setLayoutParams(new LayoutParams(mp.width, mp.height)); }
+                Log.i(TAG, "corner action: cloned AlphaOptimizedButton OK");
+                return cv;
+            }
+        } catch (Throwable alphaErr) {
+            Log.w(TAG, "corner action: AlphaOptimizedButton clone unavailable: "
+                    + alphaErr.getMessage() + "; falling back to generic copy");
+        }
+        try {
+            Context ctx = manageButton.getContext();
+            android.widget.Button b = new android.widget.Button(ctx);
+            b.setBackground(manageButton.getBackground());
+            if (manageButton instanceof android.widget.TextView) {
+                b.setText(((android.widget.TextView) manageButton).getText());
+                b.setTextColor(((android.widget.TextView) manageButton).getTextColors());
+                b.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                        ((android.widget.TextView) manageButton).getTextSize());
+            }
+            LayoutParams mp = manageButton.getLayoutParams();
+            if (mp != null) { b.setLayoutParams(new LayoutParams(mp.width, mp.height)); }
+            Log.i(TAG, "corner action: cloned generic Button OK");
+            return b;
+        } catch (Throwable genericErr) {
+            Log.w(TAG, "corner action: generic clone failed: " + genericErr.getMessage(), genericErr);
+            return null;
+        }
+    }
+
+    /** Close exactly like dragging the bubble to the bottom dismiss target. */
+    private static void dismissBubbleAsUserGesture(Object expandedView) {
+        try {
+            Object bubble = getField(expandedView, "mBubble");
+            Object key = bubble != null ? getField(bubble, "mKey") : null;
+            Object stackView = getField(expandedView, "mStackView");
+            Object data = stackView != null ? getField(stackView, "mBubbleData") : null;
+            if (data == null || !(key instanceof String)) {
+                throw new IllegalStateException("BubbleData/key unavailable");
+            }
+            Method dismiss = null;
+            for (Method method : data.getClass().getDeclaredMethods()) {
+                if (!"dismissBubbleWithKey".equals(method.getName())
+                        || method.getParameterCount() < 2
+                        || method.getParameterTypes()[0] != int.class
+                        || method.getParameterTypes()[method.getParameterCount() - 1] != String.class) {
+                    continue;
+                }
+                method.setAccessible(true);
+                dismiss = method;
+                break;
+            }
+            if (dismiss == null) throw new NoSuchMethodException("dismissBubbleWithKey");
+            Object[] args = new Object[dismiss.getParameterCount()];
+            args[0] = 1; // BubbleData.DismissReason.USER_GESTURE on Android 17.
+            for (int i = 1; i < args.length - 1; i++) {
+                Class<?> type = dismiss.getParameterTypes()[i];
+                args[i] = type.isPrimitive() ? primitiveDefault(type) : null;
+            }
+            args[args.length - 1] = key;
+            dismiss.invoke(data, args);
+            Log.i(TAG, "corner action: dismissed bubble key=" + key + " reason=USER_GESTURE");
+        } catch (Throwable t) {
+            Log.w(TAG, "corner action: dismiss bubble failed: " + t.getMessage(), t);
+        }
+    }
+
+    private static Object primitiveDefault(Class<?> type) {
+        if (type == boolean.class) return false;
+        if (type == byte.class) return (byte) 0;
+        if (type == short.class) return (short) 0;
+        if (type == int.class) return 0;
+        if (type == long.class) return 0L;
+        if (type == float.class) return 0f;
+        if (type == double.class) return 0d;
+        if (type == char.class) return (char) 0;
+        return null;
+    }
+
+    /** Legacy collapse helper retained for non-button callers. */
+    private static void collapseBubbleExpandedView(Object expandedView) {
+        // 收起小窗 = BubbleData.setExpanded(false)：把展开的小窗收回到贴边气泡列表。
+        // BubbleStackView 在 Android 17 并没有直接的 mBubbleController 字段，改为用
+        // expandedView.mStackView.mBubbleData 这个在 smali 里确认存在的字段，直接调
+        // BubbleData.setExpanded(false)（官方收起展开窗的原子操作）。
+        try {
+            // 主路径：经 mTaskViewController.this$0 拿到 BubbleController 后收起（官方收起展开窗）。
+            Object bubble = getField(expandedView, "mBubble");
+            Object bubbleTaskView = bubble != null ? getField(bubble, "mBubbleTaskView") : null;
+            Object taskView = bubbleTaskView != null ? getField(bubbleTaskView, "taskView") : null;
+            Object taskViewController = taskView != null ? getField(taskView, "mTaskViewController") : null;
+            Object collapse = null;
+            try {
+                // BubbleController 是 BubbleController$BubbleTaskViewController 的内部类，this$0 即 controller。
+                if (taskViewController != null) {
+                    Object controller = getField(taskViewController, "this$0");
+                    if (controller != null) {
+                        java.lang.reflect.Method m = findMethodSystemUi(controller.getClass(), "collapseStack");
+                        if (m != null) { m.invoke(controller); collapse = m; }
+                    }
+                }
+            } catch (Throwable ignored) { }
+            if (collapse != null) {
+                Log.i(TAG, "corner action: collapse stack invoked (controller)");
+                return;
+            }
+            // 备用：expandedView.mStackView.mBubbleData.setExpanded(false)（官方收起展开窗的原子状态）。
+            Object stackView = getField(expandedView, "mStackView");
+            Object data = stackView != null ? getField(stackView, "mBubbleData") : null;
+            java.lang.reflect.Method setExpanded = data != null
+                    ? findMethod(data.getClass(), "setExpanded", boolean.class) : null;
+            if (setExpanded != null) {
+                setExpanded.invoke(data, false);
+                Log.i(TAG, "corner action: collapse stack invoked (BubbleData.setExpanded(false))");
+                return;
+            }
+            throw new IllegalStateException("no collapse entry available");
+        } catch (Throwable t) {
+            Log.w(TAG, "corner action: collapse stack failed: " + t.getMessage(), t);
+        }
+    }
+
+    /** Official Bubble -> fullscreen handoff, preserving the current task/page. */
+    private static void expandBubbleFullscreen(Object expandedView) {
+        try {
+            Object bubble = getField(expandedView, "mBubble");
+            Object bubbleTaskView = bubble != null ? getField(bubble, "mBubbleTaskView") : null;
+            Object taskView = bubbleTaskView != null ? getField(bubbleTaskView, "taskView") : null;
+            Object controller = taskView != null ? getField(taskView, "mTaskViewController") : null;
+            Object taskController = controller != null ? getField(taskView, "mTaskViewTaskController") : null;
+            if (controller == null || taskController == null) {
+                throw new IllegalStateException("Bubble task view controller unavailable");
+            }
+            Method move = findMethod(controller.getClass(),
+                    "moveTaskViewToFullscreen", taskController.getClass());
+            if (move == null) throw new NoSuchMethodException("moveTaskViewToFullscreen");
+            move.invoke(controller, taskController);
+            Log.i(TAG, "corner action: official fullscreen handoff submitted");
+        } catch (Throwable t) {
+            Log.w(TAG, "corner action: official fullscreen handoff failed: " + t.getMessage(), t);
+        }
+    }
+
+    /* Retained as a diagnostic fallback only; the corner button does not use it. */
+    private static volatile long sLastCornerLaunchAt;
+
+    /** Collapse the embedded bubble first, then launch its exact user/profile entry. */
+    private static void launchBubbleApp(Object expandedView) {
+        try {
+            long now = android.os.SystemClock.uptimeMillis();
+            if (now - sLastCornerLaunchAt < 800L) return;
+            sLastCornerLaunchAt = now;
+
+            Object bubble = getField(expandedView, "mBubble");
+            Object packageValue = bubble != null ? getField(bubble, "mPackageName") : null;
+            Object userValue = bubble != null ? getField(bubble, "mUser") : null;
+            if (!(packageValue instanceof String) || ((String) packageValue).trim().isEmpty()
+                    || !(userValue instanceof UserHandle)) {
+                throw new IllegalStateException("Bubble package/user unavailable");
+            }
+            String packageName = (String) packageValue;
+            UserHandle user = (UserHandle) userValue;
+            LauncherApps launcher = ((View) expandedView).getContext()
+                    .getSystemService(LauncherApps.class);
+            if (launcher == null) throw new IllegalStateException("LauncherApps unavailable");
+            List<LauncherActivityInfo> activities = launcher.getActivityList(packageName, user);
+            ComponentName target = null;
+            if (activities != null) {
+                for (LauncherActivityInfo activity : activities) {
+                    if (activity == null || !user.equals(activity.getUser())) continue;
+                    ComponentName component = activity.getComponentName();
+                    if (component != null && packageName.equals(component.getPackageName())) {
+                        target = component;
+                        break;
+                    }
+                }
+            }
+            if (target == null) throw new IllegalStateException("No launcher entry for Bubble user");
+
+            // LauncherApps accepts the request while the app is still embedded, but
+            // Android 17 leaves that task behind the bubble window. Collapse first;
+            // capture all launch data above because the view may be rebuilt/cleared.
+            collapseBubbleExpandedView(expandedView);
+            final ComponentName launchTarget = target;
+            final UserHandle launchUser = user;
+            final LauncherApps launchService = launcher;
+            new android.os.Handler(Looper.getMainLooper()).postDelayed(() -> {
+                try {
+                    launchService.startMainActivity(launchTarget, launchUser, null, null);
+                    Log.i(TAG, "corner action: launcher start submitted package="
+                            + packageName + " user=" + userIdOf(launchUser));
+                } catch (Throwable t) {
+                    Log.w(TAG, "corner action: delayed launcher start failed: " + t.getMessage(), t);
+                }
+            }, 280L);
+        } catch (Throwable t) {
+            Log.w(TAG, "corner action: launcher start failed: " + t.getMessage(), t);
+        }
     }
 
     private void hookLauncher(PackageLoadedParam param) {

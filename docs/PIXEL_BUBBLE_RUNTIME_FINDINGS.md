@@ -109,5 +109,58 @@
 | 日期 | 变更 |
 |------|------|
 | 2026-10-18 | 创建；登记 L1/L2 证据（阶段 0 DEX 核验结果）；L3 空表待阶段 1 填充 |
+| 2026-10-18 | §4 新增：APK 云端构建完成（GitHub Actions），待真机安装验证 |
+
+---
+
+## 4. 阶段 1 进展：APK 云端构建（2026-10-18，已修正）
+
+### 4.0 分支修正记录（重要）
+
+> **2026-10-18 修正**：首次构建误用了 `master` 分支（@ `81630ab`，10-15），
+> 但**正确源码在 `feature/a17-bubble-corner-actions` 分支**（@ `706b0f6`，10-16，16 个提交领先 master）。
+> feature 分支包含关键 A17 修改：
+> - **右角动作使用官方 Bubble → 全屏 handoff**（不再走旧的全屏转换）
+> - **管理按钮双按钮方案**（左下角=关闭小窗、右侧克隆按钮=全屏展开 `moveTaskViewToFullscreen`）
+> - 删除旧 `BubbleIconDoubleTap` 与旧 tests
+> - 自带 `.github/workflows/build-release.yml`（无 keystore 时输出 unsigned release APK）
+>
+> 已改用 feature/a17 分支重新构建。**master 分支产物作废**（`MoreBubbleButton-v1.7-debug.apk` 仅存档）。
+
+### 4.1 构建配置（修正后）
+
+| 项 | 值 |
+|----|----|
+| 源码 | `feature/a17-bubble-corner-actions` @ `706b0f6`（**16 提交领先 master**，未改动） |
+| 构建平台 | GitHub Actions（Ubuntu 24.04）+ JDK 17 |
+| Gradle | 9.4.1（wrapper） |
+| workflow | 作者自带 `build-release.yml`（注册于 main 分支，`workflow_dispatch` 触发） |
+| 产物 | `app-release-unsigned.apk`（release 未签名，LSPosed 可安装） |
+
+### 4.2 构建结果（修正后）
+
+| 项 | 值 |
+|----|----|
+| 运行 ID | `39093084336`（首次 `39092831159` 因 wrapper jar 缺失失败） |
+| 结果 | ✅ **success** |
+| 分支 | `ci-build` @ `be8c37e`（feature/a17 源码 + 强制跟踪 wrapper jar） |
+| APK | `MoreBubbleButton-v1.7-A17-unsigned.apk` |
+| 大小 | 1,704,361 B |
+| **SHA-256** | `c6804dd6ef7bf30faa8e611f47de9b3c61049ebe87db02f05e12822161c8c689` |
+| 归档 | `artifacts/MoreBubbleButton-v1.7-A17-unsigned.apk` |
+| 内容验证 | ✅ APK 内含 `expandAppBubbleA17` / `bubbleCurrentTask`（feature/a17 分支特征代码） |
+
+### 4.3 调试过程（修正后 4 次迭代）
+
+1. `465f348` — master 分支 + 自写 workflow，路径错误。
+2. `72b3fce` — 路径修正，但 wrapper jar 被 `.gitignore` 排除 → `GradleWrapperMain` 缺失。
+3. `b2ae999` — 强制跟踪 jar → ✅ 构建成功（**但误用 master 分支**）。
+4. `e0e96b1` → `be8c37e` — **改用 feature/a17 分支** + 作者自带 workflow + 强制跟踪 jar → ✅ 成功。
+
+### 4.4 下一步（真机验证，等你操作）
+
+1. 真机安装 `MoreBubbleButton-v1.7-A17-unsigned.apk`（LSPosed 勾选 `SystemUI` + `com.google.android.apps.nexuslauncher`）。
+2. 按 §2 测试矩阵执行 A1-A4，记录 `BUBBLE_REQUEST_SUBMITTED` 与气泡可见性（分开记录）。
+3. 回填 §2.3 表格 + `DEVICE_BASELINE_TEMPLATE.md`。
 
 *文档结束 · PIXEL_BUBBLE_RUNTIME_FINDINGS.md · 阶段 1 运行时验证记录*

@@ -22,7 +22,6 @@ fun SettingsScreen() {
     var menuEnabled by remember { mutableStateOf(ModuleSettings.isMenuEnabled(ctx)) }
     var actionBarEnabled by remember { mutableStateOf(ModuleSettings.isActionBarEnabled(ctx)) }
     var systemUiBubbleEnabled by remember { mutableStateOf(ModuleSettings.isSystemUiBubbleEnabled(ctx)) }
-    var doubleTapFullscreenEnabled by remember { mutableStateOf(ModuleSettings.isDoubleTapFullscreenEnabled(ctx)) }
     var positionMode by remember { mutableIntStateOf(ModuleSettings.getPositionMode(ctx)) }
     var sliderX by remember { mutableFloatStateOf(ModuleSettings.getPosX(ctx).toFloat()) }
     var sliderY by remember { mutableFloatStateOf(ModuleSettings.getPosY(ctx).toFloat()) }
@@ -79,16 +78,6 @@ fun SettingsScreen() {
                     onCheckedChange = {
                         systemUiBubbleEnabled = it
                         ModuleSettings.setSystemUiBubbleEnabled(ctx, it)
-                    }
-                )
-                HorizontalDivider()
-                SwitchPreferenceRow(
-                    title = "双击气泡图标打开应用",
-                    subtitle = "双击同一个应用气泡图标，像桌面图标一样正常打开应用；不保留气泡内的具体页面",
-                    checked = doubleTapFullscreenEnabled,
-                    onCheckedChange = {
-                        doubleTapFullscreenEnabled = it
-                        ModuleSettings.setDoubleTapFullscreenEnabled(ctx, it)
                     }
                 )
             }
