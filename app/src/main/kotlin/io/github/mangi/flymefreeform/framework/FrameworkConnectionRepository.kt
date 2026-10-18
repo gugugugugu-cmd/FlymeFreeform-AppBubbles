@@ -52,6 +52,23 @@ internal class FrameworkConnectionRepository(
             }
         }
 
+    /**
+     * 本机实际安装的桌面作用域。
+     *
+     * 桌面包名随 ROM 而异（Pixel 用 nexuslauncher，AOSP/ColorOS 用 com.android.launcher），
+     * 写死任一个都会让另一平台永远提示「缺作用域」。这里探测实装包，
+     * 找不到时退回候选表最后一项。
+     */
+    private fun detectedLauncherScope(): String =
+        FrameworkConnectionState.LAUNCHER_SCOPE_CANDIDATES.firstOrNull { pkg ->
+            try {
+                context.packageManager.getPackageInfo(pkg, 0)
+                true
+            } catch (_: Exception) {
+                false
+            }
+        } ?: FrameworkConnectionState.LAUNCHER_SCOPE_CANDIDATES.last()
+
     fun start() {
         check(started.compareAndSet(false, true)) { "Xposed Service listener is already registered" }
         XposedServiceHelper.registerListener(serviceListener)
@@ -404,7 +421,10 @@ internal class FrameworkConnectionRepository(
                         apiVersion,
                         FrameworkConnectionIssue.WriteFailed,
                     )
-                    val scopes = service.scope.filterTo(linkedSetOf()) { it in FrameworkConnectionState.REQUIRED_SCOPES }
+                    // 必需作用域 = 基座（system / systemui）+ 本机实际安装的桌面。
+                    // 桌面包名随 ROM 不同，写死会让另一平台永远提示缺作用域。
+                    val required = FrameworkConnectionState.REQUIRED_SCOPES + detectedLauncherScope()
+                    val scopes = service.scope.filterTo(linkedSetOf()) { it in required }
                     ProbeResult.connected(service, preferences, frameworkName, frameworkVersion, apiVersion, settings, scopes)
                 }
             }

@@ -291,40 +291,37 @@ internal class ColorOsFreeformCoordinator(
                     logger(Log.WARN, "SYSTEM_POINTER_LISTENER_NO_WMS", e)
                     return
                 }
-            val register =
-                try {
-                    findMethod(windowManagerService.javaClass, "registerPointerEventListener", 2)
-                } catch (e: NoSuchMethodException) {
-                    // A17 可能改为 3 参（多带 int displayId / boolean 之类），逐一探测
-                    findAnyPointerRegisterMethod(windowManagerService.javaClass)
-                        ?: run {
-                            // 把 WMS 上所有含 Pointer 的方法名打出来，便于按真机实际情况适配
-                            val candidates =
-                                windowManagerService.javaClass.declaredMethods
-                                    .map { it.name }
-                                    .filter { it.contains("Pointer", ignoreCase = true) }
-                                    .distinct()
-                            logger(
-                                Log.WARN,
-                                "SYSTEM_POINTER_LISTENER_NO_METHOD candidates=$candidates",
-                                e,
-                            )
-                            return
+            // 只接受语义明确的签名白名单，不再「任意同名方法 + 按参数个数猜传参」。
+            // 审查意见：参数个数相同不代表类型和语义相同；若三参方法的第三个参数
+            // 不是 Boolean，反射调用会失败，而异常被捕获并不等于监听器已注册。
+            val resolved =
+                resolvePointerRegistration(windowManagerService.javaClass)
+            if (resolved == null) {
+                val candidates =
+                    windowManagerService.javaClass.declaredMethods
+                        .filter { it.name == "registerPointerEventListener" }
+                        .map { m ->
+                            m.name + m.parameterTypes.joinToString(",", "(", ")") { it.name }
                         }
-                }
-            val params = register.parameterTypes
-            val args =
-                when {
-                    params.size == 2 && params[1] == Int::class.javaPrimitiveType ->
-                        arrayOf<Any?>(listener, Display.DEFAULT_DISPLAY)
-                    params.size == 3 ->
-                        arrayOf<Any?>(listener, Display.DEFAULT_DISPLAY, false)
-                    else -> arrayOf<Any?>(listener)
-                }
+                logger(
+                    Log.WARN,
+                    "SYSTEM_POINTER_LISTENER_NO_METHOD candidates=$candidates",
+                    null,
+                )
+                return
+            }
+            val (register, args) = resolved.let { (m, build) -> m to build(listener) }
             register.invoke(windowManagerService, *args)
             pointerListener = listener
             pointerRegistered = true
-            logger(Log.INFO, "SYSTEM_POINTER_LISTENER_REGISTERED", null)
+            // 记录实际命中的签名：证明选中的是预期重载，而非碰巧调用成功的其它方法
+            logger(
+                Log.INFO,
+                "SYSTEM_POINTER_LISTENER_REGISTERED sig=${
+                    register.parameterTypes.joinToString(",", "(", ")") { it.simpleName }
+                }",
+                null,
+            )
         } catch (exception: ReflectiveOperationException) {
             logger(Log.WARN, "SYSTEM_POINTER_LISTENER_UNAVAILABLE", exception)
         } catch (exception: RuntimeException) {
@@ -332,11 +329,41 @@ internal class ColorOsFreeformCoordinator(
         }
     }
 
-    /** 兜底：在 WMS 上查找任意签名的 pointer 注册方法，兼容 A17 签名变化。 */
-    private fun findAnyPointerRegisterMethod(type: Class<*>): java.lang.reflect.Method? =
-        type.declaredMethods.firstOrNull {
-            it.name == "registerPointerEventListener" && it.parameterTypes.isNotEmpty()
-        }?.apply { isAccessible = true }
+    /**
+     * 解析 WMS 上的指针注册方法。
+     *
+     * 白名单（语义已确认）：
+     *   1. registerPointerEventListener(PointerEventListener)            —— 旧版
+     *   2. registerPointerEventListener(PointerEventListener, int)       —— 带 displayId（A17 实机命中）
+     *
+     * 不存在「三参布尔」形态，因此不再支持——那个分支从未被任何设备触发过，
+     * 留着只会带来「误配到无关重载」的风险。
+     *
+     * @return 方法 + 参数构造器；无精确匹配时返回 null。
+     */
+    private fun resolvePointerRegistration(
+        type: Class<*>,
+    ): Pair<java.lang.reflect.Method, (Any) -> Array<Any?>>? {
+        val candidates = type.declaredMethods.filter { it.name == "registerPointerEventListener" }
+        for (method in candidates) {
+            val params = method.parameterTypes
+            val builder =
+                when {
+                    params.size == 1 && !params[0].isPrimitive ->
+                        { listener: Any -> arrayOf<Any?>(listener) }
+                    params.size == 2 &&
+                        !params[0].isPrimitive &&
+                        params[1] == Int::class.javaPrimitiveType ->
+                        { listener: Any -> arrayOf<Any?>(listener, Display.DEFAULT_DISPLAY) }
+                    else -> null
+                }
+            if (builder != null) {
+                method.isAccessible = true
+                return method to builder
+            }
+        }
+        return null
+    }
 
     private fun enqueuePointerEvent(event: MotionEvent, generation: Long) {
         if (!pointerRegistered || generation != pointerGeneration) return

@@ -93,6 +93,12 @@ internal class SystemUiCornerInputMonitor(
         settings = snapshot
         pendingSettings = null
         val allowed = environmentState.isGestureAllowed(refreshKeyguard = true)
+        module.log(
+            Log.INFO,
+            TAG,
+            "SYSTEMUI_CORNER_GATE allowed=$allowed left=${snapshot.leftCornerEnabled} " +
+                "right=${snapshot.rightCornerEnabled} env=${environmentState.describe()}",
+        )
         updateSide(CornerSide.Left, allowed && snapshot.leftCornerEnabled)
         updateSide(CornerSide.Right, allowed && snapshot.rightCornerEnabled)
     }
@@ -100,7 +106,10 @@ internal class SystemUiCornerInputMonitor(
     private fun updateSide(side: CornerSide, shouldExist: Boolean) {
         val existing = bindings[side]
         if (!shouldExist) {
-            if (existing != null) removeBinding(side, existing)
+            if (existing != null) {
+                removeBinding(side, existing)
+                module.log(Log.INFO, TAG, "SYSTEMUI_CORNER_ZONE_REMOVED side=$side")
+            }
             return
         }
 
@@ -142,10 +151,17 @@ internal class SystemUiCornerInputMonitor(
         try {
             windowManager.addView(view, createLayoutParams(side, size))
             bindings[side] = CornerBinding(view, size)
+            // 「监视器 ready」不等于「热区已建」：审查要求分别留证。
+            module.log(
+                Log.INFO,
+                TAG,
+                "SYSTEMUI_CORNER_ZONE_ADDED side=$side size=$size " +
+                    "h=${zone.horizontalLimitPx} v=${zone.verticalLimitPx}",
+            )
         } catch (exception: ReflectiveOperationException) {
-            module.log(Log.WARN, TAG, "SYSTEMUI_CORNER_SPY_ADD_FAILED", exception)
+            module.log(Log.WARN, TAG, "SYSTEMUI_CORNER_SPY_ADD_FAILED side=$side", exception)
         } catch (exception: RuntimeException) {
-            module.log(Log.WARN, TAG, "SYSTEMUI_CORNER_SPY_ADD_FAILED", exception)
+            module.log(Log.WARN, TAG, "SYSTEMUI_CORNER_SPY_ADD_FAILED side=$side", exception)
         }
     }
 
@@ -176,6 +192,8 @@ internal class SystemUiCornerInputMonitor(
                 viewRoot.javaClass.getMethod("getInputToken").invoke(viewRoot) as? IBinder
                     ?: return false
             pilferPointersMethod.invoke(inputManager, inputToken)
+            // 抢占成功需留证：系统导航手势是否被正确接管，取决于这一步。
+            module.log(Log.INFO, TAG, "SYSTEMUI_CORNER_PILFER_OK")
             true
         } catch (exception: ReflectiveOperationException) {
             logPilferFailure(exception)

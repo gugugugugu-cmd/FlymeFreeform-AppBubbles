@@ -57,7 +57,20 @@ internal data class FrameworkConnectionState(
             linkedSetOf(
                 "system",
                 "com.android.systemui",
+            )
+
+        /**
+         * 候选桌面包名。
+         *
+         * 桌面在 LSPosed 里需单独勾选作用域，但包名随 ROM 而异：
+         * AOSP / ColorOS 为 com.android.launcher，Pixel 为 nexuslauncher。
+         * 固定写死任一个都会让另一平台永远提示「缺作用域」。
+         */
+        val LAUNCHER_SCOPE_CANDIDATES: List<String> =
+            listOf(
+                "com.google.android.apps.nexuslauncher",
                 "com.android.launcher",
+                "com.android.launcher3",
             )
     }
 }
