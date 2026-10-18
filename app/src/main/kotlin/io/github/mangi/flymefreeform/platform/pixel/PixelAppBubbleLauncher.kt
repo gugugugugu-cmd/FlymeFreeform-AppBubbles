@@ -88,6 +88,22 @@ internal class PixelAppBubbleLauncher(
 
     override fun isAvailable(): Boolean = controller != null
 
+    /**
+     * 从 IBubblesImpl 实例（BubbleController$IBubblesImpl）取其外部类实例作为 controller。
+     */
+    fun bindFromIBubblesImpl(impl: Any) {
+        if (controller != null) return
+        try {
+            val ctl = findField(impl, "this\$0") ?: return
+            if (ctl.javaClass.name.contains("BubbleController")) {
+                controller = ctl
+                Log.i(TAG, "bindFromIBubblesImpl: controller bound")
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "bindFromIBubblesImpl failed: ${t.message}")
+        }
+    }
+
     override fun launch(request: BubbleLaunchRequest): BubbleLaunchResult {
         val ctl = controller ?: return BubbleLaunchResult.BackendUnavailable
 

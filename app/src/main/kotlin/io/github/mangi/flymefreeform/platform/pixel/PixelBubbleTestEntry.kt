@@ -43,7 +43,7 @@ internal class PixelBubbleTestEntry(
         // 2) hook BubblesManager 构造器 + 事件回调兜底（阶段 1 验证过的
         //    BubblesManager.mBubbles → this$0 → BubbleController 链）
         launcher.bindController()
-        installBubblesManagerCapture()
+        installBubbleControllerCapture()
         val filter =
             IntentFilter().apply {
                 addAction(ACTION_TEST_LAUNCH_BUBBLE)
@@ -83,11 +83,13 @@ internal class PixelBubbleTestEntry(
                             userHandle = userHandle,
                             source = source,
                         )
+                    // 广播到达时再解一次（hook 可能已在此前捕获到实例）
+                    if (!launcher.isAvailable()) launcher.bindController()
                     val result = launcher.launch(request)
                     module.log(
                         Log.INFO,
                         TAG,
-                        "BUBBLE_TEST_RESULT ${resultStateName(result)} component=$component user=$userId",
+                        "BUBBLE_TEST_RESULT ${resultStateName(result)} available=${launcher.isAvailable()} component=$component user=$userId",
                     )
                 }
             }
@@ -102,127 +104,95 @@ internal class PixelBubbleTestEntry(
     }
 
     /**
-     * hook BubblesManager 以捕获 BubbleController 实例。
+     * 捕获 BubbleController 实例。
      *
-     * A17 上 BubbleController 没有公开静态单例，阶段 1（MoreBubbleButton）验证的
-     * 可靠路径是事件链：BubblesManager.mBubbles (IBubblesImpl) → this$0 → BubbleController。
-     * 这里 hook 两个必然经过的点：
-     *   - BubblesManager 构造函数（SystemUI 启动即创建，最早拿到实例）
-     *   - BubblesManager.onUserChangedBubble(NotificationEntry, boolean)（阶段 1 已证存在）
-     * 任一命中即调用 launcher.bindFromBubblesManager() 完成绑定。
+     * 关键教训（真机日志）：BubbleController / BubblesManager 在模块 hook 安装前
+     * 就已构造完毕（SystemUI 进程常驻 + wm_shell 早期初始化），所以「hook 构造器」
+     * 永远等不到调用。改为 hook 它们的**任意实例方法**——只要该对象还活着，
+     * 启动后必然至少被调用一次（刷新、查询、dump 等），即可用 thisObject 拿到实例。
      */
-    private fun installBubblesManagerCapture() {
-        try {
-            val cl = context.javaClass.classLoader ?: return
-            val bubblesCls = cl.loadClass("com.android.systemui.wmshell.BubblesManager")
-            // 构造器捕获（任意签名，命中即绑定）
-            var ctorHooked = 0
-            for (ctor in bubblesCls.declaredConstructors) {
-                try {
-                    module
-                        .hook(ctor)
-                        .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.PROTECTIVE)
-                        .setId("flymefreeform.bubbles_manager_ctor_${ctorHooked}")
-                        .intercept { chain ->
-                            val result = chain.proceed()
-                            try {
-                                // 构造器无 this，用返回值（新实例）绑定；
-                                // mBubbles 可能在构造后才赋值，延迟重试
-                                bindWithRetry(result)
-                            } catch (_: Throwable) {
-                            }
-                            result
-                        }
-                    ctorHooked++
-                } catch (_: Throwable) {
-                }
-            }
-            module.log(Log.INFO, TAG, "PIXEL_BUBBLE_BUBBLES_MANAGER_CTOR_HOOKED count=$ctorHooked")
-            // 主动探测：BubblesManager 是否已有实例（hook 安装晚于构造时）
-            try {
-                for (f in bubblesCls.declaredFields) {
-                    if (java.lang.reflect.Modifier.isStatic(f.modifiers) && !f.type.isPrimitive) {
-                        try {
-                            f.isAccessible = true
-                            val inst = f.get(null)
-                            if (inst != null && inst.javaClass.name.contains("BubblesManager")) {
-                                module.log(Log.INFO, TAG, "PIXEL_BUBBLE_BUBBLES_MANAGER_STATIC_FOUND ${f.name}")
-                                bindWithRetry(inst)
-                            }
-                        } catch (_: Throwable) {
-                        }
-                    }
-                }
-            } catch (_: Throwable) {
-            }
-            // 事件回调捕获（兜底）
-            for (m in bubblesCls.declaredMethods) {
-                val isUserChanged =
-                    m.name == "onUserChangedBubble" &&
-                        m.parameterCount == 2 &&
-                        m.parameterTypes[0].name.contains("NotificationEntry") &&
-                        m.parameterTypes[1] == java.lang.Boolean.TYPE
-                val isExpand =
-                    m.name == "expandStackAndSelectBubble" &&
-                        m.parameterCount == 1 &&
-                        m.parameterTypes[0].name.contains("NotificationEntry")
-                if (!isUserChanged && !isExpand) continue
-                try {
-                    module
-                        .hook(m)
-                        .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.PROTECTIVE)
-                        .setId("flymefreeform.bubbles_manager_capture_" + m.name)
-                        .intercept { chain ->
-                            val result = chain.proceed()
-                            try {
-                                bindWithRetry(chain.thisObject)
-                            } catch (_: Throwable) {
-                            }
-                            result
-                        }
-                    module.log(Log.INFO, TAG, "PIXEL_BUBBLE_BUBBLES_MANAGER_EVENT_HOOKED ${m.name}")
-                } catch (_: Throwable) {
-                }
-            }
-        } catch (t: Throwable) {
-            module.log(Log.WARN, TAG, "PIXEL_BUBBLE_BUBBLES_MANAGER_HOOK_FAILED ${t.message}")
-        }
-        installBubbleControllerCtorCapture()
+    private fun installBubbleControllerCapture() {
+        val cl = context.javaClass.classLoader ?: return
+        // 目标类：BubbleController 本身（最优） + BubblesManager（阶段 1 验证的事件源）
+        captureFromClass(cl, "com.android.wm.shell.bubbles.BubbleController", "CONTROLLER")
+        captureFromClass(cl, "com.android.systemui.wmshell.BubblesManager", "BUBBLES_MANAGER")
+        // BubblesManager.mBubbles(IBubblesImpl) 也是高频对象，其 this$0 就是 controller
+        captureFromClass(cl, "com.android.wm.shell.bubbles.BubbleController\$IBubblesImpl", "IBUBBLES_IMPL")
     }
 
     /**
-     * hook BubbleController 构造函数直接捕获实例（比 BubblesManager 链更直接）。
-     * BubbleController 是 SystemUI 气泡核心，创建时必然走构造函数。
+     * 对目标类：hook 全部构造器 + 全部实例方法（排除明显高频噪声的 toString/hashCode 等，
+     * 但为最大化命中率仍然保留全部——仅首次命中会真正绑定，之后 AtomicBoolean 短路）。
      */
-    private fun installBubbleControllerCtorCapture() {
-        try {
-            val cl = context.javaClass.classLoader ?: return
-            val ctrlCls = cl.loadClass("com.android.wm.shell.bubbles.BubbleController")
-            var ctorHooked = 0
-            for (ctor in ctrlCls.declaredConstructors) {
-                try {
-                    module
-                        .hook(ctor)
-                        .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.PROTECTIVE)
-                        .setId("flymefreeform.bubble_controller_ctor_${ctorHooked}")
-                        .intercept { chain ->
-                            val result = chain.proceed()
+    private fun captureFromClass(cl: ClassLoader, className: String, tag: String) {
+        val cls = try { cl.loadClass(className) } catch (_: Throwable) { return }
+        val captured = java.util.concurrent.atomic.AtomicBoolean(false)
+        var methodHooked = 0
+        for (m in cls.declaredMethods) {
+            if (java.lang.reflect.Modifier.isStatic(m.modifiers)) continue
+            if (m.isSynthetic || m.isBridge) continue
+            try {
+                module
+                    .hook(m)
+                    .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.PROTECTIVE)
+                    .setId("flymefreeform.capture_${tag}_${m.name}_${m.parameterCount}")
+                    .intercept { chain ->
+                        if (captured.compareAndSet(false, true)) {
                             try {
-                                if (result != null && result.javaClass.name.contains("BubbleController")) {
-                                    launcher.setController(result)
-                                    module.log(Log.INFO, TAG, "PIXEL_BUBBLE_BUBBLE_CONTROLLER_CTOR_CAPTURED")
-                                }
+                                onInstanceCaptured(chain.thisObject, tag)
                             } catch (_: Throwable) {
                             }
-                            result
                         }
-                    ctorHooked++
-                } catch (_: Throwable) {
-                }
+                        chain.proceed()
+                    }
+                methodHooked++
+            } catch (_: Throwable) {
             }
-            module.log(Log.INFO, TAG, "PIXEL_BUBBLE_BUBBLE_CONTROLLER_CTOR_HOOKED count=$ctorHooked")
-        } catch (t: Throwable) {
-            module.log(Log.WARN, TAG, "PIXEL_BUBBLE_BUBBLE_CONTROLLER_CTOR_FAILED ${t.message}")
+        }
+        var ctorHooked = 0
+        for (ctor in cls.declaredConstructors) {
+            try {
+                module
+                    .hook(ctor)
+                    .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.PROTECTIVE)
+                    .setId("flymefreeform.capture_${tag}_ctor_$ctorHooked")
+                    .intercept { chain ->
+                        val result = chain.proceed()
+                        if (captured.compareAndSet(false, true)) {
+                            try {
+                                onInstanceCaptured(result, tag)
+                            } catch (_: Throwable) {
+                            }
+                        }
+                        result
+                    }
+                ctorHooked++
+            } catch (_: Throwable) {
+            }
+        }
+        module.log(
+            Log.INFO,
+            TAG,
+            "PIXEL_BUBBLE_CAPTURE_HOOKED tag=$tag methods=$methodHooked ctors=$ctorHooked",
+        )
+    }
+
+    /** 某目标对象首次被观测到：按 tag 决定是直接作为 controller 还是走 BubblesManager 链。 */
+    private fun onInstanceCaptured(instance: Any?, tag: String) {
+        if (instance == null) return
+        when (tag) {
+            "CONTROLLER" -> {
+                launcher.setController(instance)
+                module.log(Log.INFO, TAG, "PIXEL_BUBBLE_CONTROLLER_CAPTURED via=$tag")
+            }
+            "BUBBLES_MANAGER" -> {
+                bindWithRetry(instance)
+                module.log(Log.INFO, TAG, "PIXEL_BUBBLE_CONTROLLER_CAPTURED via=$tag")
+            }
+            "IBUBBLES_IMPL" -> {
+                launcher.bindFromIBubblesImpl(instance)
+                module.log(Log.INFO, TAG, "PIXEL_BUBBLE_CONTROLLER_CAPTURED via=$tag available=${launcher.isAvailable()}")
+            }
         }
     }
 
