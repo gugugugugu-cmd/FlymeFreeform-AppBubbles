@@ -1072,14 +1072,13 @@ final class BubbleHooks {
     }
 
     /* Retained as a diagnostic fallback only; the corner button does not use it. */
-    private static volatile long this.sLastCornerLaunchAt;
 
     /** Collapse the embedded bubble first, then launch its exact user/profile entry. */
     private void launchBubbleApp(Object expandedView) {
         try {
             long now = android.os.SystemClock.uptimeMillis();
-            if (now - this.sLastCornerLaunchAt < 800L) return;
-            this.sLastCornerLaunchAt = now;
+            if (now - BubbleHooks.sLastCornerLaunchAt < 800L) return;
+            BubbleHooks.sLastCornerLaunchAt = now;
 
             Object bubble = this.getField(expandedView, "mBubble");
             Object packageValue = bubble != null ? this.getField(bubble, "mPackageName") : null;
