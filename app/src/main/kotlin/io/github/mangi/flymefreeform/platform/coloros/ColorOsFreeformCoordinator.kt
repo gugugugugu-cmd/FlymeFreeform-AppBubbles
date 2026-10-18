@@ -251,9 +251,44 @@ internal class ColorOsFreeformCoordinator(
                         else -> null
                     }
                 }
-            val windowManagerService = readWindowManagerService()
-            val register = findMethod(windowManagerService.javaClass, "registerPointerEventListener", 2)
-            register.invoke(windowManagerService, listener, Display.DEFAULT_DISPLAY)
+            val windowManagerService =
+                try {
+                    readWindowManagerService()
+                } catch (e: Throwable) {
+                    logger(Log.WARN, "SYSTEM_POINTER_LISTENER_NO_WMS", e)
+                    return
+                }
+            val register =
+                try {
+                    findMethod(windowManagerService.javaClass, "registerPointerEventListener", 2)
+                } catch (e: NoSuchMethodException) {
+                    // A17 可能改为 3 参（多带 int displayId / boolean 之类），逐一探测
+                    findAnyPointerRegisterMethod(windowManagerService.javaClass)
+                        ?: run {
+                            // 把 WMS 上所有含 Pointer 的方法名打出来，便于按真机实际情况适配
+                            val candidates =
+                                windowManagerService.javaClass.declaredMethods
+                                    .map { it.name }
+                                    .filter { it.contains("Pointer", ignoreCase = true) }
+                                    .distinct()
+                            logger(
+                                Log.WARN,
+                                "SYSTEM_POINTER_LISTENER_NO_METHOD candidates=$candidates",
+                                e,
+                            )
+                            return
+                        }
+                }
+            val params = register.parameterTypes
+            val args =
+                when {
+                    params.size == 2 && params[1] == Int::class.javaPrimitiveType ->
+                        arrayOf<Any?>(listener, Display.DEFAULT_DISPLAY)
+                    params.size == 3 ->
+                        arrayOf<Any?>(listener, Display.DEFAULT_DISPLAY, false)
+                    else -> arrayOf<Any?>(listener)
+                }
+            register.invoke(windowManagerService, *args)
             pointerListener = listener
             pointerRegistered = true
             logger(Log.INFO, "SYSTEM_POINTER_LISTENER_REGISTERED", null)
@@ -263,6 +298,12 @@ internal class ColorOsFreeformCoordinator(
             logger(Log.WARN, "SYSTEM_POINTER_LISTENER_FAILED", exception)
         }
     }
+
+    /** 兜底：在 WMS 上查找任意签名的 pointer 注册方法，兼容 A17 签名变化。 */
+    private fun findAnyPointerRegisterMethod(type: Class<*>): java.lang.reflect.Method? =
+        type.declaredMethods.firstOrNull {
+            it.name == "registerPointerEventListener" && it.parameterTypes.isNotEmpty()
+        }?.apply { isAccessible = true }
 
     private fun enqueuePointerEvent(event: MotionEvent, generation: Long) {
         if (!pointerRegistered || generation != pointerGeneration) return
