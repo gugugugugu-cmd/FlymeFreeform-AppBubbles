@@ -89,4 +89,10 @@
     <!-- @author bomo 原生侧边栏入口开关；不关闭系统服务和工具。 -->
     <string name="hide_native_sidebar_title">隐藏系统侧边栏</string>
     <string name="hide_native_sidebar_summary">隐藏系统浮标并停用其边缘滑动入口，保留 Flyme 小窗和系统工具；修改后重启手机生效</string>
+    <string name="bubble_task_menu_title">任务卡片菜单</string>
+    <string name="bubble_task_menu_summary">在最近任务的卡片菜单里增加「消息气泡」</string>
+    <string name="bubble_action_bar_title">小窗底部按钮</string>
+    <string name="bubble_action_bar_summary">在气泡小窗底部操作栏增加应用图标按钮</string>
+    <string name="bubble_notification_icon_title">通知横幅气泡图标</string>
+    <string name="bubble_notification_icon_summary">在非前台通知上显示小程序气泡入口</string>
 </resources>

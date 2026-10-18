@@ -41,6 +41,10 @@ class MainActivity : ComponentActivity() {
                     onPanelScaleChange = repository::setPanelScalePercent,
                     onHandleSwipeUpToMiniEnabledChange =
                         repository::setHandleSwipeUpToMiniEnabled,
+                    onBubbleTaskMenuEnabledChange = repository::setBubbleTaskMenuEnabled,
+                    onBubbleActionBarEnabledChange = repository::setBubbleActionBarEnabled,
+                    onBubbleNotificationIconEnabledChange =
+                        repository::setBubbleNotificationIconEnabled,
                     onPauseInLandscapeChange = repository::setPauseInLandscape,
                     onPauseInGameModeChange = repository::setPauseInGameMode,
                     onRequestScopes = repository::requestMissingScopes,

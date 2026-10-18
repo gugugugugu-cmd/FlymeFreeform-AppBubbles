@@ -133,6 +133,15 @@ internal class FrameworkConnectionRepository(
     fun setHandleSwipeUpToMiniEnabled(enabled: Boolean) =
         updateSettings { it.copy(handleSwipeUpToMiniEnabled = enabled) }
 
+    fun setBubbleTaskMenuEnabled(enabled: Boolean) =
+        updateSettings { it.copy(bubbleTaskMenuEnabled = enabled) }
+
+    fun setBubbleActionBarEnabled(enabled: Boolean) =
+        updateSettings { it.copy(bubbleActionBarEnabled = enabled) }
+
+    fun setBubbleNotificationIconEnabled(enabled: Boolean) =
+        updateSettings { it.copy(bubbleNotificationIconEnabled = enabled) }
+
     fun setPauseInLandscape(enabled: Boolean) =
         updateSettings { it.copy(pauseInLandscape = enabled) }
 

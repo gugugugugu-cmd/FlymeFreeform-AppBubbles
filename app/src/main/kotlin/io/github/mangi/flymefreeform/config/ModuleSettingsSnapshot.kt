@@ -24,6 +24,10 @@ internal data class ModuleSettingsSnapshot(
     val innerPinnedComponents: List<ComponentName> = emptyList(),
     val handleSwipeUpToMiniEnabled: Boolean =
         ModulePreferences.DEFAULT_HANDLE_SWIPE_UP_TO_MINI_ENABLED,
+    val bubbleTaskMenuEnabled: Boolean = ModulePreferences.DEFAULT_BUBBLE_TASK_MENU_ENABLED,
+    val bubbleActionBarEnabled: Boolean = ModulePreferences.DEFAULT_BUBBLE_ACTION_BAR_ENABLED,
+    val bubbleNotificationIconEnabled: Boolean =
+        ModulePreferences.DEFAULT_BUBBLE_NOTIFICATION_ICON_ENABLED,
     val pauseInLandscape: Boolean = ModulePreferences.DEFAULT_PAUSE_IN_LANDSCAPE,
     val pauseInGameMode: Boolean = ModulePreferences.DEFAULT_PAUSE_IN_GAME_MODE,
 ) {
@@ -61,6 +65,18 @@ internal data class ModuleSettingsSnapshot(
             .putBoolean(
                 ModulePreferences.KEY_HANDLE_SWIPE_UP_TO_MINI_ENABLED,
                 handleSwipeUpToMiniEnabled,
+            )
+            .putBoolean(
+                ModulePreferences.KEY_BUBBLE_TASK_MENU_ENABLED,
+                bubbleTaskMenuEnabled,
+            )
+            .putBoolean(
+                ModulePreferences.KEY_BUBBLE_ACTION_BAR_ENABLED,
+                bubbleActionBarEnabled,
+            )
+            .putBoolean(
+                ModulePreferences.KEY_BUBBLE_NOTIFICATION_ICON_ENABLED,
+                bubbleNotificationIconEnabled,
             )
         if (pinsSaved) {
             editor.putString(
@@ -138,6 +154,21 @@ internal data class ModuleSettingsSnapshot(
                     ModulePreferences.KEY_HANDLE_SWIPE_UP_TO_MINI_ENABLED,
                     ModulePreferences.DEFAULT_HANDLE_SWIPE_UP_TO_MINI_ENABLED,
                 )
+            val bubbleTaskMenuEnabled =
+                preferences.getBoolean(
+                    ModulePreferences.KEY_BUBBLE_TASK_MENU_ENABLED,
+                    ModulePreferences.DEFAULT_BUBBLE_TASK_MENU_ENABLED,
+                )
+            val bubbleActionBarEnabled =
+                preferences.getBoolean(
+                    ModulePreferences.KEY_BUBBLE_ACTION_BAR_ENABLED,
+                    ModulePreferences.DEFAULT_BUBBLE_ACTION_BAR_ENABLED,
+                )
+            val bubbleNotificationIconEnabled =
+                preferences.getBoolean(
+                    ModulePreferences.KEY_BUBBLE_NOTIFICATION_ICON_ENABLED,
+                    ModulePreferences.DEFAULT_BUBBLE_NOTIFICATION_ICON_ENABLED,
+                )
             val pinsSaved = preferences.contains(ModulePreferences.KEY_CORNER_PINS)
             val innerPinsSaved = preferences.contains(ModulePreferences.KEY_CORNER_INNER_PINS)
             val pins =
@@ -173,6 +204,9 @@ internal data class ModuleSettingsSnapshot(
                 pinsSaved = pinsSaved,
                 pinnedComponents = pins,
                 handleSwipeUpToMiniEnabled = handleSwipeUpToMiniEnabled,
+                bubbleTaskMenuEnabled = bubbleTaskMenuEnabled,
+                bubbleActionBarEnabled = bubbleActionBarEnabled,
+                bubbleNotificationIconEnabled = bubbleNotificationIconEnabled,
                 pauseInLandscape = preferences.getBoolean(
                     ModulePreferences.KEY_PAUSE_IN_LANDSCAPE,
                     ModulePreferences.DEFAULT_PAUSE_IN_LANDSCAPE,

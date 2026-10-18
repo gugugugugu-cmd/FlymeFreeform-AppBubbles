@@ -36,7 +36,6 @@ import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material.icons.rounded.SwipeLeft
 import androidx.compose.material.icons.rounded.SwipeRight
 import androidx.compose.material.icons.rounded.SwipeUp
-import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -102,6 +101,9 @@ internal fun ControlScreen(
     /** @author bomo 「全部」面板缩放百分比变更（设置界面滑条，热生效）。 */
     onPanelScaleChange: (Int) -> Unit,
     onHandleSwipeUpToMiniEnabledChange: (Boolean) -> Unit,
+    onBubbleTaskMenuEnabledChange: (Boolean) -> Unit,
+    onBubbleActionBarEnabledChange: (Boolean) -> Unit,
+    onBubbleNotificationIconEnabledChange: (Boolean) -> Unit,
     onPauseInLandscapeChange: (Boolean) -> Unit,
     onPauseInGameModeChange: (Boolean) -> Unit,
     onRequestScopes: () -> Unit,
@@ -190,6 +192,14 @@ internal fun ControlScreen(
                                 onHandleSwipeUpToMiniEnabledChange,
                         )
                     }
+                    item(key = "bubbles") {
+                        BubbleCard(
+                            state = state,
+                            onTaskMenuEnabledChange = onBubbleTaskMenuEnabledChange,
+                            onActionBarEnabledChange = onBubbleActionBarEnabledChange,
+                            onNotificationIconEnabledChange = onBubbleNotificationIconEnabledChange,
+                        )
+                    }
                     item(key = "environment") {
                         EnvironmentCard(state, onPauseInLandscapeChange, onPauseInGameModeChange)
                     }
@@ -232,6 +242,42 @@ private fun EnvironmentCard(
             summary = stringResource(R.string.pause_in_game_mode_summary),
             enabled = state.canChangeSettings,
             startAction = { PreferenceIcon(Icons.Rounded.SportsEsports, state.canChangeSettings) },
+        )
+    }
+}
+
+@Composable
+private fun BubbleCard(
+    state: FrameworkConnectionState,
+    onTaskMenuEnabledChange: (Boolean) -> Unit,
+    onActionBarEnabledChange: (Boolean) -> Unit,
+    onNotificationIconEnabledChange: (Boolean) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        SwitchPreference(
+            checked = state.settings.bubbleTaskMenuEnabled,
+            onCheckedChange = onTaskMenuEnabledChange,
+            title = stringResource(R.string.bubble_task_menu_title),
+            summary = stringResource(R.string.bubble_task_menu_summary),
+            enabled = state.canChangeSettings,
+            startAction = { PreferenceIcon(Icons.Rounded.Dashboard, state.canChangeSettings) },
+        )
+        SwitchPreference(
+            checked = state.settings.bubbleActionBarEnabled,
+            onCheckedChange = onActionBarEnabledChange,
+            title = stringResource(R.string.bubble_action_bar_title),
+            summary = stringResource(R.string.bubble_action_bar_summary),
+            enabled = state.canChangeSettings,
+            startAction = { PreferenceIcon(Icons.Rounded.Apps, state.canChangeSettings) },
+        )
+        SwitchPreference(
+            checked = state.settings.bubbleNotificationIconEnabled,
+            onCheckedChange = onNotificationIconEnabledChange,
+            title = stringResource(R.string.bubble_notification_icon_title),
+            summary = stringResource(R.string.bubble_notification_icon_summary),
+            enabled = state.canChangeSettings,
+            startAction =
+                { PreferenceIcon(Icons.Rounded.Category, state.canChangeSettings) },
         )
     }
 }

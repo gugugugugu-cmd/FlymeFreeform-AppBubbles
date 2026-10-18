@@ -53,6 +53,18 @@ internal object ModulePreferences {
     const val DEFAULT_CORNER_ENABLED = true
     const val DEFAULT_CORNER_TRIGGER_RANGE_DP = 84
     const val DEFAULT_HANDLE_SWIPE_UP_TO_MINI_ENABLED = true
+
+    /** 任务卡片「消息气泡」菜单项。 */
+    const val KEY_BUBBLE_TASK_MENU_ENABLED = "bubble_task_menu_enabled"
+    const val DEFAULT_BUBBLE_TASK_MENU_ENABLED = true
+
+    /** 气泡小窗底部操作栏按钮。 */
+    const val KEY_BUBBLE_ACTION_BAR_ENABLED = "bubble_action_bar_enabled"
+    const val DEFAULT_BUBBLE_ACTION_BAR_ENABLED = true
+
+    /** 通知横幅上的气泡图标。 */
+    const val KEY_BUBBLE_NOTIFICATION_ICON_ENABLED = "bubble_notification_icon_enabled"
+    const val DEFAULT_BUBBLE_NOTIFICATION_ICON_ENABLED = true
     const val DEFAULT_PAUSE_IN_LANDSCAPE = true
     const val DEFAULT_PAUSE_IN_GAME_MODE = true
     const val MIN_CORNER_TRIGGER_RANGE_DP = 24

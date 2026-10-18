@@ -42,6 +42,9 @@ internal fun FlymeFreeformNavHost(
     /** @author bomo 「全部」面板缩放百分比变更。 */
     onPanelScaleChange: (Int) -> Unit,
     onHandleSwipeUpToMiniEnabledChange: (Boolean) -> Unit,
+    onBubbleTaskMenuEnabledChange: (Boolean) -> Unit,
+    onBubbleActionBarEnabledChange: (Boolean) -> Unit,
+    onBubbleNotificationIconEnabledChange: (Boolean) -> Unit,
     onPauseInLandscapeChange: (Boolean) -> Unit,
     onPauseInGameModeChange: (Boolean) -> Unit,
     onRequestScopes: () -> Unit,
@@ -85,6 +88,10 @@ internal fun FlymeFreeformNavHost(
                         onPanelScaleChange = onPanelScaleChange,
                         onHandleSwipeUpToMiniEnabledChange =
                             onHandleSwipeUpToMiniEnabledChange,
+                        onBubbleTaskMenuEnabledChange = onBubbleTaskMenuEnabledChange,
+                        onBubbleActionBarEnabledChange = onBubbleActionBarEnabledChange,
+                        onBubbleNotificationIconEnabledChange =
+                            onBubbleNotificationIconEnabledChange,
                         onPauseInLandscapeChange = onPauseInLandscapeChange,
                         onPauseInGameModeChange = onPauseInGameModeChange,
                         onRequestScopes = onRequestScopes,
