@@ -127,22 +127,51 @@ internal class PixelAppBubbleLauncher(
         val intent = resolved
         val user = request.userHandle
 
-        // 3. 提交（A17 官方配方优先，legacy 回退）
+        // 3. 提交：必须在 SystemUI 主线程执行（阶段 1 验证：controller.mMainExecutor 派发），
+        //    广播线程直接调用会被 BubbleController 的线程断言/UI 校验吞掉。
+        val mainExecutor = mainExecutorOf(ctl)
+        val work =
+            Runnable {
+                try {
+                    val done = expandAppBubbleA17(ctl, intent, user)
+                    if (!done) {
+                        val legacyDone = expandAppBubbleLegacy(ctl, intent, user)
+                        Log.i(TAG, "BUBBLE_EXPAND legacyDone=$legacyDone")
+                    }
+                } catch (t: Throwable) {
+                    Log.w(TAG, "BUBBLE_EXPAND failed: ${t.message}", t)
+                }
+            }
         return try {
-            val done = expandAppBubbleA17(ctl, intent, user)
-            if (done) {
+            if (mainExecutor != null) {
+                mainExecutor.execute(work)
                 BubbleLaunchResult.BubbleRequestSubmitted
             } else {
-                // A17 配方失败：确认是否根本没有 A17 入口（回退 legacy）
-                val legacyDone = expandAppBubbleLegacy(ctl, intent, user)
-                if (legacyDone) BubbleLaunchResult.BubbleRequestSubmitted
-                else BubbleLaunchResult.BackendUnavailable
+                // 拿不到主线程执行器时退回直接调用（至少拿到诊断日志）
+                Log.w(TAG, "BUBBLE_EXPAND no mMainExecutor, running inline")
+                val done = expandAppBubbleA17(ctl, intent, user)
+                if (done) BubbleLaunchResult.BubbleRequestSubmitted
+                else if (expandAppBubbleLegacy(ctl, intent, user)) BubbleLaunchResult.BubbleRequestSubmitted
+                else BubbleLaunchResult.ExpandFailed
             }
         } catch (t: Throwable) {
             Log.w(TAG, "launch failed: ${t.message}")
             BubbleLaunchResult.ExpandFailed
         }
     }
+
+    /** BubbleController.mMainExecutor（HandlerExecutor）；取不到返回 null。 */
+    private fun mainExecutorOf(controller: Any): java.util.concurrent.Executor? =
+        try {
+            when (val ex =
+                findField(controller, "mMainExecutor")
+                    ?: findField(controller, "mShellExecutor")) {
+                is java.util.concurrent.Executor -> ex
+                else -> null
+            }
+        } catch (_: Throwable) {
+            null
+        }
 
     /** 显式解析目标 Activity；解析失败返回 null（不降级为 setPackage 隐式解析）。 */
     private fun resolveTarget(component: ComponentName): Intent? =
@@ -172,7 +201,8 @@ internal class PixelAppBubbleLauncher(
         user: UserHandle,
     ): Boolean {
         try {
-            val cl = controller.javaClass.classLoader ?: return false
+            val cl = controller.javaClass.classLoader ?: run { Log.w(TAG, "BUBBLE_A17 step1 miss")
+                        return false }
             val bubbleCls = cl.loadClass("com.android.wm.shell.bubbles.Bubble")
             val dataCls = cl.loadClass("com.android.wm.shell.bubbles.BubbleData")
             val typeCls = cl.loadClass("com.android.wm.shell.bubbles.Bubble\$BubbleType")
@@ -187,23 +217,30 @@ internal class PixelAppBubbleLauncher(
                     bubbleCls,
                     epCls,
                     reqCls,
-                ) ?: return false
+                ) ?: run { Log.w(TAG, "BUBBLE_A17 step2 miss")
+                        return false }
 
-            val data = findField(controller, "mBubbleData") ?: return false
-            val pkg = intent.getPackage() ?: return false
+            val data = findField(controller, "mBubbleData") ?: run { Log.w(TAG, "BUBBLE_A17 step3 miss")
+                        return false }
+            val pkg = intent.getPackage() ?: run { Log.w(TAG, "BUBBLE_A17 step4 miss")
+                        return false }
 
             val keyForApp =
                 findMethod(bubbleCls, "getAppBubbleKeyForApp", String::class.java, UserHandle::class.java)
-                    ?: return false
-            val key = keyForApp.invoke(null, pkg, user) as? String ?: return false
+                    ?: run { Log.w(TAG, "BUBBLE_A17 step5 miss")
+                        return false }
+            val key = keyForApp.invoke(null, pkg, user) as? String ?: run { Log.w(TAG, "BUBBLE_A17 step6 miss")
+                        return false }
 
             val findOverflow =
                 findMethod(dataCls, "findAndRemoveBubbleFromOverflow", String::class.java)
             var bubble = findOverflow?.invoke(data, key)
 
             if (bubble == null) {
-                val typeApp = enumConstant(typeCls, "TYPE_APP") ?: return false
-                val dataCtx = findField(data, "mContext") as? Context ?: return false
+                val typeApp = enumConstant(typeCls, "TYPE_APP") ?: run { Log.w(TAG, "BUBBLE_A17 step7 miss")
+                        return false }
+                val dataCtx = findField(data, "mContext") as? Context ?: run { Log.w(TAG, "BUBBLE_A17 step8 miss")
+                        return false }
                 val pm =
                     findMethod(controller.javaClass, "getPackageManagerForUser", Integer.TYPE, Context::class.java)
                         ?.let { m ->
@@ -229,19 +266,21 @@ internal class PixelAppBubbleLauncher(
                 }
                 val ctor =
                     findConstructor(bubbleCls, Intent::class.java, UserHandle::class.java, Icon::class.java, typeCls, String::class.java)
-                        ?: return false
+                        ?: run { Log.w(TAG, "BUBBLE_A17 step9 miss")
+                        return false }
                 bubble = ctor.newInstance(intent, user, icon, typeApp, key)
             }
             if (bubble == null) return false
 
             val entryPoint = enumConstant(epCls, "NOTIFICATION_BUBBLE_BUTTON")
                 ?: enumConstant(epCls, "NOTIFICATION")
-                ?: return false
+                ?: run { Log.w(TAG, "BUBBLE_A17 step10 miss")
+                        return false }
 
             expand.invoke(controller, bubble, entryPoint, null)
             return true
         } catch (t: Throwable) {
-            Log.w(TAG, "expandAppBubbleA17 failed: ${t.message}")
+            Log.w(TAG, "BUBBLE_A17 failed: ${t.javaClass.simpleName}: ${t.message}", t)
             return false
         }
     }
