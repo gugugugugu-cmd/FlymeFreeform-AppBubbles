@@ -1,8 +1,10 @@
 # 阶段 2：平台无关启动接口（Phase 2 · Launch Interface Layer）
 
-> 状态：✅ 已实现并云构建通过（GitHub Actions）
+> 状态：✅ **已实现 + 真机 L3 验证通过（微信气泡小窗成功弹出）**
 > 日期：2026-10-18
-> 分支：`phase2` @ `7500362`（CI 产物）；main @ `7c8e795`（源码基线同步）
+> 分支：`phase2` @ `082d4f9`（L3 验证产物 SHA `d0830ef5`）；`91c7429`（手势接线补完）
+> main：@ `6cc9d9e`（源码基线同步）
+> 真机记录：见 `PIXEL_BUBBLE_RUNTIME_FINDINGS.md` §5–§7
 
 ---
 
@@ -100,20 +102,36 @@ interface AppLaunchCommitter {
 
 | 项 | 值 |
 |----|----|
-| 运行 ID | `39095838812` |
+| L3 验证版运行 ID | `39104493025` |
 | 结果 | ✅ success |
-| APK | `FlymeFreeform-0.2.6-phase2.apk`（3,149,094 B） |
-| **SHA-256** | `ab8e95d85ebc01171b7f17c1dda6df73d5dac22d08b87a626dddbee9eec8c510` |
-| 验证 | APK dex 含 `PixelAppBubbleLauncher` + `BUBBLE_REQUEST_SUBMITTED` |
+| APK | `FlymeFreeform-phase2-v10.apk`（3,149,094 B） |
+| **SHA-256** | `d0830ef56631208655db6fca0c1c2b67e84febc0d91fb94431c8cc9d896f6e3e` |
+| 归档 | `artifacts/FlymeFreeform-0.2.6-phase2-v10.apk` |
+| 验证 | 真机微信气泡小窗成功弹出（L3） |
 
-## 7. 真机测试（待执行）
+历史迭代（全部 success）：`39095838812` → `39097949014` → `39098790099` → `39099798780`
+→ `39100610551` → `39101491597` → `39102364699` → `39102898769` → `39104493025`。
 
-1. LSPosed 勾选 `FlymeFreeform` 模块（作用域：`SystemUI` + `com.google.android.apps.nexuslauncher` + 测试目标 App）。
-2. 安装 `FlymeFreeform-0.2.6-phase2.apk`，重启 SystemUI（`adb shell killall com.android.systemui`）。
-3. 用 §5 广播触发测试气泡启动，观察：
-   - 目标 App 是否出现气泡（而非全屏）
-   - 模块日志中的 9 态结果码
-4. 记录到 `PIXEL_BUBBLE_RUNTIME_FINDINGS.md` §5（阶段 2 测试）。
+## 7. 真机测试结果（L3 已达成）
+
+| 项 | 结果 |
+|----|------|
+| 设备 | Android 17（SDK 37） |
+| LSPosed 作用域 | `com.android.systemui` |
+| 触发 | `am broadcast -a io.github.mangi.flymefreeform.ACTION_TEST_LAUNCH_BUBBLE --es component com.tencent.mm/.ui.LauncherUI --el user_id 0 com.android.systemui` |
+| controller 绑定 | ✅ `available=true`（三路径全命中） |
+| 结果码 | ✅ `BUBBLE_REQUEST_SUBMITTED` |
+| 视觉 | ✅ **微信气泡小窗弹出** |
+
+排查出的 6 个连环缺陷见 `PIXEL_BUBBLE_RUNTIME_FINDINGS.md` §6（含 `android.util.Log` 在模块进程不可见的日志通道陷阱）。
+
+## 7.1 手势 → 气泡闭环（本次补完）
+
+`AppLaunchCommitter` 此前**只有接口、无实现**，`committer` 恒为 null，手势一直回落 ColorOS 原生启动。现补：
+
+- `PixelBubbleBackend`：SystemUI 进程内 launcher 共享单例
+- `PixelBubbleLaunchCommitter`：`commit(ComponentName)` → `PixelAppBubbleLauncher.launch()`
+- `ColorOsFreeformCoordinator.launchWithCommitter()` 惰性解析，平台判定（SystemUI 进程 + `BubbleController` 存在）
 
 ## 8. 阶段 3 预告（跨进程路由）
 

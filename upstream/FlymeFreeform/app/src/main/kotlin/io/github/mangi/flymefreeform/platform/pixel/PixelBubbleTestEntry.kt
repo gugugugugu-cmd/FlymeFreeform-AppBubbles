@@ -31,10 +31,11 @@ internal class PixelBubbleTestEntry(
     private val context: Context,
     private val module: XposedModule,
 ) {
-    private val launcher = PixelAppBubbleLauncher(context).also { l ->
-        // LSPosed 模块进程里 android.util.Log 不进模块日志，必须转给 module.log()
-        l.debugSink = { msg -> module.log(Log.INFO, TAG, "BUBBLE_DIAG $msg") }
-    }
+    private val launcher =
+        PixelBubbleBackend.get(context) { msg ->
+            // LSPosed 模块进程里 android.util.Log 不进模块日志，必须转给 module.log()
+            module.log(Log.INFO, TAG, "BUBBLE_DIAG $msg")
+        }
     private var bound = false
     private var receiver: BroadcastReceiver? = null
 

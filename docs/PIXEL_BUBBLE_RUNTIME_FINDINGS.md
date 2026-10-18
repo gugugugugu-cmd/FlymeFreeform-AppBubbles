@@ -164,3 +164,57 @@
 3. 回填 §2.3 表格 + `DEVICE_BASELINE_TEMPLATE.md`。
 
 *文档结束 · PIXEL_BUBBLE_RUNTIME_FINDINGS.md · 阶段 1 运行时验证记录*
+
+---
+
+# 阶段 2 真机验证记录（L3 达成）
+
+> 日期：2026-10-18 · 设备：Android 17（SDK 37）· 目标：微信 `com.tencent.mm/.ui.LauncherUI`
+> 结论：**✅ L3 端到端可用 —— 微信气泡小窗成功弹出**（产物 SHA `d0830ef5`，phase2 @ `082d4f9`）
+
+## 5. 达成的证据链
+
+| 证据 | 值 | 说明 |
+|------|----|------|
+| controller 绑定 | `PIXEL_BUBBLE_CONTROLLER_CAPTURED via=BUBBLES_MANAGER / CONTROLLER / IBUBBLES_IMPL` | 三条路径均命中，`available=true` |
+| 广播接收 | `PIXEL_BUBBLE_TEST_RECEIVED action=...ACTION_TEST_LAUNCH_BUBBLE` | 双 action 兼容生效 |
+| A17 配方 | `BUBBLE_A17 step1..step10` 全过 | 无 `stepN miss` |
+| 提交结果 | `BUBBLE_TEST_RESULT BUBBLE_REQUEST_SUBMITTED available=true` | 同步等待 `finished=true ok=true` |
+| **视觉** | **微信气泡小窗弹出** | ✅ L3 |
+
+## 6. 阶段 2 排查出的 6 个连环缺陷（按发现顺序）
+
+| # | 现象 | 根因 | 修复 |
+|---|------|------|------|
+| 1 | 广播 `result=0` 但无任何反应 | 接收器未注册 `RECEIVER_EXPORTED`（API 34+ 要求） | 显式 `Context.RECEIVER_EXPORTED` |
+| 2 | `launcherAvailable=false` | A17 无 `BubbleController.INSTANCE` 静态单例 | 改走 `BubblesManager.mBubbles → this$0` 链 |
+| 3 | 仍 `launcherAvailable=false` | hook 构造器装在 `SystemUIApplication.onCreate` 之后，对象早已构造 | 改 hook **任意实例方法**（启动后必调），三路径独立首次命中 |
+| 4 | 广播永不触发处理 | `IntentFilter` 注册双 action，但 `onReceive` 首行只认主 action，LEGACY 被静默丢弃 | `onReceive` 接受双 action |
+| 5 | **所有 `BUBBLE_A17` 日志缺失** | `PixelAppBubbleLauncher` 用 `android.util.Log`，LSPosed 模块进程内**不写入模块日志文件**，只有 `module.log()` 可见 —— 导致多轮误判「配方全过」 | 增加 `debugSink` 钩子转发 `module.log()` |
+| 6 | `BUBBLE_A17 step4 miss` | `Intent.setComponent()` **不填充** `getPackage()`，配方第 4 步 `intent.getPackage() ?: return false` | `resolveTarget` 显式 `setPackage(component.packageName)` |
+
+> **教训（写入 §0 证据分级补充）**：日志通道本身也是被测对象。`android.util.Log` 在 LSPosed 模块进程内不可见于模块日志，任何诊断代码必须走 `module.log()`，否则「无输出」会被误读为「无问题」。
+
+## 7. 阶段 2 收尾交付（本次补充）
+
+### 7.1 手势 → 气泡闭环接线
+
+此前 `AppLaunchCommitter` 只有接口定义、**全项目无实现类**，`ColorOsFreeformCoordinator` 的 `committer` 参数恒为 `null`，扇形手势始终回落到 ColorOS 原生启动。现补齐：
+
+| 文件 | 作用 |
+|------|------|
+| `platform/pixel/PixelBubbleBackend.kt` | SystemUI 进程内 `PixelAppBubbleLauncher` 共享单例（测试入口与手势提交共用同一 controller 捕获） |
+| `platform/pixel/PixelBubbleBackend.kt#PixelBubbleLaunchCommitter` | `AppLaunchCommitter` 实现：`commit(ComponentName)` → 气泡后端，仅 `BubbleRequestSubmitted` 视为 accepted |
+| `platform/coloros/ColorOsFreeformCoordinator.kt` | `launchWithCommitter()` 惰性解析 `pixelCommitter()`；平台判定 = SystemUI 进程 + `BubbleController` 类存在，其它平台行为不变 |
+
+### 7.2 真机测试步骤（可复现）
+
+```bash
+# LSPosed 作用域：com.android.systemui（必需）
+am broadcast -a io.github.mangi.flymefreeform.ACTION_TEST_LAUNCH_BUBBLE \
+  --es component com.tencent.mm/.ui.LauncherUI --el user_id 0 com.android.systemui
+```
+
+预期日志：`BUBBLE_TEST_RECEIVED` → `BUBBLE_A17 ...` → `BUBBLE_TEST_RESULT BUBBLE_REQUEST_SUBMITTED`，微信气泡弹出。
+
+*阶段 2 记录结束 · 2026-10-18*
