@@ -57,6 +57,16 @@ internal class PixelAppBubbleLauncher(
     }
 
     /**
+     * 外部（hook 回调）设置 controller 实例。
+     */
+    fun setController(ctl: Any) {
+        if (ctl.javaClass.name.contains("BubbleController")) {
+            controller = ctl
+            Log.i(TAG, "setController: controller bound (${ctl.javaClass.name})")
+        }
+    }
+
+    /**
      * 从 BubblesManager 实例链捕获 BubbleController（阶段 1 验证过的路径）：
      *   BubblesManager.mBubbles (IBubblesImpl) → this$0 → BubbleController
      * SystemUI 事件回调（onUserChangedBubble / expandStackAndSelectBubble）的
@@ -339,6 +349,7 @@ internal class PixelAppBubbleLauncher(
         for (lsName in listOf(
             "com.android.systemui.shared.system.LocalServices",
             "com.android.systemui.util.concurrency.LocalServices",
+            "com.android.systemui.LocalServices",
         )) {
             try {
                 val lsCls = cl.loadClass(lsName)
@@ -347,6 +358,33 @@ internal class PixelAppBubbleLauncher(
                 if (ctl != null) return ctl
             } catch (_: Throwable) {
             }
+        }
+        // 路径 3：LocalServices.getService(BubblesManager) → mBubbles → this$0 链。
+        for (lsName in listOf(
+            "com.android.systemui.shared.system.LocalServices",
+            "com.android.systemui.LocalServices",
+        )) {
+            try {
+                val lsCls = cl.loadClass(lsName)
+                val getService = lsCls.getMethod("getService", Class::class.java)
+                val bm = getService.invoke(null, cl.loadClass("com.android.systemui.wmshell.BubblesManager"))
+                if (bm != null) {
+                    val ctl = controllerFromBubblesManager(bm)
+                    if (ctl != null) return ctl
+                }
+            } catch (_: Throwable) {
+            }
+        }
+        return null
+    }
+
+    /** BubblesManager → mBubbles → this$0 → BubbleController */
+    private fun controllerFromBubblesManager(bubblesManager: Any): Any? {
+        try {
+            val bubblesImpl = findField(bubblesManager, "mBubbles") ?: return null
+            val ctl = findField(bubblesImpl, "this\$0") ?: return null
+            if (ctl.javaClass.name.contains("BubbleController")) return ctl
+        } catch (_: Throwable) {
         }
         return null
     }
