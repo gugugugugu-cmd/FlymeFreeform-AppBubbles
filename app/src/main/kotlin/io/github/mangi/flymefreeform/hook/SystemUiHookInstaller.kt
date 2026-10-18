@@ -5,6 +5,7 @@ import android.content.Context
 import android.util.Log
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import io.github.mangi.flymefreeform.platform.pixel.GestureBubbleIpcReceiver
 import io.github.mangi.flymefreeform.platform.pixel.PixelBubbleTestEntry
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -64,6 +65,8 @@ internal class SystemUiHookInstaller(
         // 不改手势 UI：外部通过广播 ACTION_TEST_LAUNCH_BUBBLE 提交 BubbleLaunchRequest。
         try {
             PixelBubbleTestEntry(context, module).start()
+            // system_server 的手势提交入口（跨进程）：扇形选中应用 → 本进程气泡后端
+            GestureBubbleIpcReceiver(context, module).start()
             module.log(Log.INFO, TAG, "PIXEL_BUBBLE_TEST_ENTRY_STARTED")
         } catch (exception: Throwable) {
             module.log(Log.WARN, TAG, "PIXEL_BUBBLE_TEST_ENTRY_START_FAILED", exception)

@@ -158,7 +158,19 @@ internal class PixelAppBubbleLauncher(
                 BubbleLaunchResult.ExpandFailed
             }
         }
-        // 同步等待主线程执行结果（最多 2s），避免异步分支一律报 SUBMITTED 造成假成功。
+        // 关键：若当前**就是** SystemUI 主线程，不能再投递同一执行器后同步等待——
+        // 那是自己等自己，必然超时（审查意见 P0-2）。此时就地执行并直接返回结果。
+        if (isMainThread()) {
+            dbg("BUBBLE_EXPAND on-main-thread inline")
+            return if (inlineExpand(ctl, intent, user)) {
+                BubbleLaunchResult.BubbleRequestSubmitted
+            } else {
+                BubbleLaunchResult.ExpandFailed
+            }
+        }
+        // 非主线程：投递到 mMainExecutor 并同步等待（最多 2s），避免异步分支一律报
+        // SUBMITTED 造成假成功。调用方须保证自身不在主线程（见 GestureBubbleIpcReceiver
+        // 的独立 HandlerThread + 单线程 executor）。
         val latch = java.util.concurrent.CountDownLatch(1)
         val okRef = java.util.concurrent.atomic.AtomicBoolean(false)
         mainExecutor.execute {
@@ -195,6 +207,10 @@ internal class PixelAppBubbleLauncher(
         dbg("BUBBLE_EXPAND legacyDone=$legacyDone")
         return legacyDone
     }
+
+    /** 当前线程是否 SystemUI 主线程。 */
+    private fun isMainThread(): Boolean =
+        android.os.Looper.myLooper() != null && android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
 
     /** BubbleController.mMainExecutor（HandlerExecutor）；取不到返回 null。 */
     private fun mainExecutorOf(controller: Any): java.util.concurrent.Executor? =

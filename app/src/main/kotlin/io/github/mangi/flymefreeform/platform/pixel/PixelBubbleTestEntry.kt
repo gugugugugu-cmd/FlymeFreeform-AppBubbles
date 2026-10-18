@@ -123,10 +123,15 @@ internal class PixelBubbleTestEntry(
             module.log(Log.WARN, TAG, "PIXEL_BUBBLE_TEST_ENTRY_DISABLED production build")
             return
         }
+        // 关键：接收器绑到独立 HandlerThread。
+        // 若用默认重载，onReceive 在 SystemUI 主线程执行，而 launch() 内部要投递主线程并
+        // 同步等待 —— 自己等自己，必然 SUBMISSION_TIMEOUT（审查意见 P0-2）。
+        val looper = android.os.HandlerThread("flyme-bubble-test-rx").apply { start() }.looper
+        val rxHandler = android.os.Handler(looper)
         if (Build.VERSION.SDK_INT >= 34) {
-            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED, rxHandler)
         } else {
-            context.registerReceiver(receiver, filter)
+            context.registerReceiver(receiver, filter, null, rxHandler)
         }
         module.log(Log.INFO, TAG, "PIXEL_BUBBLE_TEST_ENTRY_READY launcherAvailable=${launcher.isAvailable()}")
     }

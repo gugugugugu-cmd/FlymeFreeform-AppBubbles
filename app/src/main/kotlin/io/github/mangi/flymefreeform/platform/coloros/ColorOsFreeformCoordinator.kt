@@ -33,6 +33,8 @@ import io.github.mangi.flymefreeform.gesture.GestureAction
 import io.github.mangi.flymefreeform.hook.ModuleEnvironmentState
 import io.github.mangi.flymefreeform.hook.ProcessConfiguration
 import io.github.mangi.flymefreeform.platform.common.AppLaunchCommitter
+import io.github.mangi.flymefreeform.platform.common.GestureBubbleIpcClient
+import io.github.mangi.flymefreeform.platform.common.GestureBubbleIpcProtocol
 import io.github.mangi.flymefreeform.platform.common.SystemServerAccess
 import io.github.mangi.flymefreeform.window.CornerRadialOverlayView
 import java.lang.reflect.Proxy
@@ -49,10 +51,13 @@ internal class ColorOsFreeformCoordinator(
     private val logger: (priority: Int, code: String, throwable: Throwable?) -> Unit,
     /**
      * 平台无关提交接口（阶段 2 / 任务书 §5.2.1）。
-     * 默认 ColorOS 自由窗实现；Pixel 等其它平台可注入各自后端。
-     * 为 null 时回退为原 ColorOS 直接启动（保持既有行为）。
+     *
+     * **默认即接入**：手势选中应用后先走 [GestureBubbleIpcClient]，
+     * 由它跨进程把请求送给 SystemUI 的 Pixel 气泡后端（见 [GestureBubbleIpcProtocol]）。
+     * 之所以在协调器内部构造而不是由 installer 注入：提交器必须用 system_server 的
+     * Context 发广播，而 installer 拿不到该 Context。注入仅用于测试替身。
      */
-    private val committer: AppLaunchCommitter? = null,
+    private val committer: AppLaunchCommitter? = GestureBubbleIpcClient(context, logger),
 ) : CornerRadialOverlayView.Listener {
     private val context = systemServer.context
     private val handler = Handler(Looper.getMainLooper())
@@ -494,25 +499,55 @@ internal class ColorOsFreeformCoordinator(
         }
     }
 
-    /** 平台无关提交：优先走注入的 committer，否则回退 ColorOS 直接启动。 */
+    /**
+     * 平台无关提交（审查意见 P1：统一回退语义）。
+     *
+     * 三条互斥规则：
+     *  - **受理**：请求已交给 SystemUI 的 BubbleController → 记 started，不再重复启动；
+     *  - **明确拒绝**：可安全回退 → 走 ColorOS 原生自由窗启动；
+     *  - **结果未知**（超时 / 通道不可用 / 后端崩溃）：**不回退也不重试**，
+     *    以免同一次手势开出两个窗口；只记诊断码等待人工判断。
+     *
+     * 注意「受理」不等于「气泡已显示」——后者属于实机观察项，
+     * 不能在这里用一个 true 就当成已经弹出。
+     */
     private fun launchWithCommitter(component: ComponentName): FreeformLaunchResult {
         val injected = committer
-        if (injected != null) {
-            val accepted = try {
-                injected.commit(component)
+        if (injected == null) return launcher.launch(component)
+        val outcome =
+            try {
+                when (injected) {
+                    is GestureBubbleIpcClient -> injected.submit(component)
+                    // 测试替身：Bool 语义按「受理 / 拒绝」二分
+                    else -> if (injected.commit(component)) {
+                        GestureBubbleIpcProtocol.Outcome.Accepted
+                    } else {
+                        GestureBubbleIpcProtocol.Outcome.Rejected
+                    }
+                }
             } catch (t: Throwable) {
                 logger(Log.WARN, "COMMITTER_CRASHED ${t.message}", t)
-                false
+                GestureBubbleIpcProtocol.Outcome.Unknown
             }
-            return if (accepted) FreeformLaunchResult.Started
-            else FreeformLaunchResult.Failed("COMMITTER_REJECTED", CommitterRejectedException(component.flattenToString()))
+        return when (outcome) {
+            GestureBubbleIpcProtocol.Outcome.Accepted -> FreeformLaunchResult.Started
+            GestureBubbleIpcProtocol.Outcome.Rejected -> {
+                logger(Log.INFO, "COMMITTER_REJECTED_FALLBACK ${component.flattenToShortString()}", null)
+                launcher.launch(component)
+            }
+            GestureBubbleIpcProtocol.Outcome.Unknown -> {
+                // 明确标记"未知"，调用方不得据此重试（launchCommittedApp 只记日志）
+                FreeformLaunchResult.Failed(
+                    "COMMITTER_RESULT_UNKNOWN",
+                    CommitterUnknownException(component.flattenToString()),
+                )
+            }
         }
-        return launcher.launch(component)
     }
 
-    /** committer 拒绝提交时的哨兵异常（Failed.cause 为非空 Throwable）。 */
-    private class CommitterRejectedException(component: String) :
-        RuntimeException("committer rejected: $component")
+    /** committer 结果未知时的哨兵异常（Failed.cause 为非空 Throwable）。 */
+    private class CommitterUnknownException(component: String) :
+        RuntimeException("committer result unknown: $component")
 
     /**
      * Hook 进程的框架远端配置是只读的（实测 `edit()` 抛 `UnsupportedOperationException`），
