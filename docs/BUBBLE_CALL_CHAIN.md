@@ -86,7 +86,7 @@ proxy.showAppBubble(testIntent, userHandle, entryPoint, null) // L1189 (反射)
 | 组件精确定位 `task.getTopComponent()` | 1167-1175 | 反射读 top component → `setComponent` |
 | `UserHandle.of(int)` | 1177 | 反射调用 AOSP `UserHandle.of` |
 | `EntryPoint.NOTIFICATION` | 1178-1182 | 枚举 `$VALUES` 数组遍历，取 `NOTIFICATION` |
-| `showAppBubble(Intent, UserHandle, EntryPoint, BubbleBarLocation$UpdateLocationRequest)` | 1186-1189 | **按方法名遍历** `proxy.getClass().getMethods()` 取首个 `showAppBubble`，实参 `(bIntent, userHandle, ep, null)` |
+| `showAppBubble(Intent, UserHandle, EntryPoint, BubbleBarLocation)` | 1186-1189 | **按方法名遍历** `proxy.getClass().getMethods()` 取首个 `showAppBubble`，实参 `(bIntent, userHandle, ep, null)`。**第四参类型已 DEX 核验为 `BubbleBarLocation`**（非 `UpdateLocationRequest`——那是 `expandStackAndSelectAppBubble` 的第三参类型，两者不可混用） |
 
 ### 2.3 限制（对移植至关重要）
 

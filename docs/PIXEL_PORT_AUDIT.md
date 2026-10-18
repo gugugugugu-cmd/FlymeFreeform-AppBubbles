@@ -256,7 +256,7 @@
 | `SystemUiProxy.showAppBubble` 仅支持既有任务 Intent | 🟡 | 手势任意应用场景不可用 | 阶段 1 实测"非任务 Intent"路径 |
 | 侧边栏目录来源缺失 | 🟡 | 应用选择无数据 | 用 `LauncherAppRepository` 替代 |
 | A17 `registerPointerEventListener` 重载签名变化 | 🟡 | 输入注册失败 | 反射时按 2 参/1 参候选尝试 |
-| MT MCP 服务不可达（本次会话 Connection refused） | 🟢 | 无法自动反编译目标 ROM | 文档标注"待真机/反编译验证"，由用户补齐或服务恢复后补做 |
+| MT MCP 服务不可达（~~本次会话 Connection refused~~） | 🟢 | ~~无法自动反编译目标 ROM~~ | **已恢复（2026-10-18）**：已反编译 SystemUI 17 / Pixel Launcher 17 完成 DEX 核验（§10）。首次连接失败作为历史记录保留（当时 MT 服务尚未启动） |
 
 ---
 
@@ -292,6 +292,11 @@
 **证据说明**：
 - 证书 SHA-256 由 `mt_apk_read_signature` 直接读取（比文件哈希更强的真伪证据——证书由 APK 签名私钥生成，伪造需同一私钥）。
 - `系统界面_17.apk` 证书 subject 为 `CN=cnmrlin`（**第三方定制 ROM 签名，非 Google 原厂**）——核验结论限定于该构建；`Pixel 启动器_17.apk` 为 Google 签名（与 Play 版 nexuslauncher 一致）。
+- **来源同源性分析（2026-10-18 补充）**：
+  - 两者都是 `compileSdkVersion=37 / versionName=17 / minSdk=37 / targetSdk=37` 的 A17 构建。
+  - Launcher manifest：`com.google.android.apps.nexuslauncher`，`uses-feature PIXEL_EXPERIENCE required=true` → **Google 原厂 Pixel 构建**。
+  - SystemUI manifest：`sharedUserId=android.uid.systemui`、`coreApp=true`；**不含** `cnmrlin` 字符串；**含** `ScreenDecorations`、`UdfpsOverlayInteractor`、`RoundedCornerResDelegateImpl` 等 **Pixel 专属硬件类**（屏幕装饰/屏下指纹/圆角协调）。
+  - **结论**：SystemUI 是**目标 Pixel 设备的 A17 定制 ROM 组件**（重签名，作者 cnmrlin），Launcher 是**原厂 Pixel 构建**。两者同属 A17 Pixel 生态，但 **SystemUI 与目标设备实际运行的 ROM 是否逐字节一致仍未证实**——需真机比对（`pm path` + 签名哈希）。
 - **文件级 SHA-256 回填命令**（真机执行，MT 目录下）：
 
 ```bash
