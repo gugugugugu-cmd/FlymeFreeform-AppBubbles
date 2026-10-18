@@ -62,6 +62,12 @@ internal class PixelBubbleTestEntry(
                     ) {
                         return
                     }
+                    // 发送方 uid（Android 14+ 提供；低版本返回 -1 表示未知，按不可信处理）
+                    val senderUid = sendingUid
+                    if (!isTrustedCaller(senderUid)) {
+                        module.log(Log.WARN, TAG, "PIXEL_BUBBLE_TEST_REJECTED senderUid=$senderUid")
+                        return
+                    }
                     module.log(Log.INFO, TAG, "PIXEL_BUBBLE_TEST_RECEIVED action=${intent.action}")
                     val component =
                         intent.getStringExtra(EXTRA_COMPONENT)
@@ -98,7 +104,13 @@ internal class PixelBubbleTestEntry(
                 }
             }
         // Android 14+（API 34+）：动态注册非系统广播必须显式指定 exported 标志。
-        // 测试入口需要接收 adb / 外部进程广播，故用 RECEIVER_EXPORTED。
+        // 测试入口需要接收 adb / 外部进程广播，故用 RECEIVER_EXPORTED；
+        // 但导出后会成为任意第三方 App 可触发的入口，因此再用权限校验限定调用方。
+        // 正式发布构建不应包含本入口（见 requireTestScopeEnabled）。
+        if (!requireTestScopeEnabled()) {
+            module.log(Log.WARN, TAG, "PIXEL_BUBBLE_TEST_ENTRY_DISABLED production build")
+            return
+        }
         if (Build.VERSION.SDK_INT >= 34) {
             context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
         } else {
@@ -220,6 +232,30 @@ internal class PixelBubbleTestEntry(
         handler.post(task)
     }
 
+    /**
+     * 测试入口是否允许启用。
+     *
+     * 广播入口是 [Context.RECEIVER_EXPORTED] 的，任何第三方 App 都能伪造启动请求。
+     * 因此仅在显式开启 `persist.flymefreeform.test_entry=1` 时注册：
+     *   adb shell setprop persist.flymefreeform.test_entry 1
+     *   adb shell setprop persist.flymefreeform.test_entry 0   # 关闭
+     * 未设置时默认关闭，避免测试后门进入日常使用。
+     */
+    private fun requireTestScopeEnabled(): Boolean =
+        try {
+            SystemProperties.getBoolean(PROP_TEST_ENTRY, false)
+        } catch (_: Throwable) {
+            false
+        }
+
+    /**
+     * 校验广播调用方：只接受 shell(2000) / root(0) / system(1000)。
+     *
+     * adb broadcast 的发送者 uid 是 2000（shell），普通三方 App 是其自身 uid，一律拒绝。
+     */
+    private fun isTrustedCaller(receiverUid: Int): Boolean =
+        receiverUid == 0 || receiverUid == 2000 || receiverUid == 1000
+
     private fun resultStateName(result: BubbleLaunchResult): String =
         when (result) {
             BubbleLaunchResult.RequestValidationFailed -> "REQUEST_VALIDATION_FAILED"
@@ -241,6 +277,9 @@ internal class PixelBubbleTestEntry(
         const val EXTRA_COMPONENT = "component"
         const val EXTRA_USER_ID = "user_id"
         const val EXTRA_SOURCE = "source"
+
+        /** 测试入口开关：setprop persist.flymefreeform.test_entry 1 开启，默认关闭。 */
+        const val PROP_TEST_ENTRY = "persist.flymefreeform.test_entry"
         private const val TAG = "FlymeFreeform"
     }
 }

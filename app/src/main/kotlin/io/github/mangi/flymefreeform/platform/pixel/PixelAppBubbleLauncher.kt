@@ -125,9 +125,13 @@ internal class PixelAppBubbleLauncher(
 
         // 1. 请求校验（任务书：不默认 userId=0，非主用户明确拒绝）
         // getIdentifier() 在 SDK 37 为隐藏 API，用反射读取。
+        // 读不到身份时明确拒绝，不得兜底成主用户（会把"无法验证"当成"确定是 0"）。
         val userId = runCatching {
             UserHandle::class.java.getMethod("getIdentifier").invoke(request.userHandle) as Int
-        }.getOrElse { 0 }
+        }.getOrElse {
+            dbgWarn("BUBBLE_LAUNCH user-id read failed: ${it.javaClass.simpleName}")
+            return BubbleLaunchResult.RequestValidationFailed
+        }
         if (userId != 0) {
             return BubbleLaunchResult.RequestValidationFailed
         }
@@ -170,7 +174,10 @@ internal class PixelAppBubbleLauncher(
         val ok = okRef.get()
         dbg("BUBBLE_EXPAND main-thread finished=$finished ok=$ok")
         return when {
-            !finished -> BubbleLaunchResult.BubbleRequestSubmitted
+            !finished -> {
+                dbgWarn("BUBBLE_EXPAND timeout after 2s, state unknown")
+                BubbleLaunchResult.SubmissionTimeout
+            }
             ok -> BubbleLaunchResult.BubbleRequestSubmitted
             else -> BubbleLaunchResult.ExpandFailed
         }

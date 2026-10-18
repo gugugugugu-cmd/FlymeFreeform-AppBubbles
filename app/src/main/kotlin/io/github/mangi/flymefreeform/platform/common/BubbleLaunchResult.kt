@@ -19,6 +19,14 @@ sealed interface BubbleLaunchResult {
     /** 气泡请求已成功提交给系统（Bubble 已创建或已从 overflow 取出并请求展开）。 */
     data object BubbleRequestSubmitted : BubbleLaunchResult
 
+    /**
+     * 提交后等待系统主线程执行超时，结果未知。
+     *
+     * **不得**与 [BubbleRequestSubmitted] 混用：超时只说明"没有观察到执行完成"，
+     * 既不能断言气泡已出现，也不能断言失败（任务可能仍在排队）。
+     */
+    data object SubmissionTimeout : BubbleLaunchResult
+
     /** 气泡创建失败（Bubble 构造失败 / 图标解析失败等）。 */
     data object BubbleCreateFailed : BubbleLaunchResult
 

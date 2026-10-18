@@ -85,7 +85,8 @@ class ModuleMain : XposedModule() {
                 SystemUiHookInstaller(this, settings).install(param.classLoader)
             }
 
-            processName == PROCESS_LAUNCHER && param.packageName == PROCESS_LAUNCHER -> {
+            processName == PROCESS_LAUNCHER && param.packageName == PROCESS_LAUNCHER ||
+                processName == PROCESS_LAUNCHER_PIXEL && param.packageName == PROCESS_LAUNCHER_PIXEL -> {
                 hooksInstalled = true
                 LauncherHookInstaller(this, settings).install(param.classLoader)
             }
@@ -101,6 +102,7 @@ class ModuleMain : XposedModule() {
         param.isSystemServer ||
             param.processName == PROCESS_SYSTEM_UI ||
             param.processName == PROCESS_LAUNCHER ||
+            param.processName == PROCESS_LAUNCHER_PIXEL ||
             param.processName == ColorOsSidebarTarget.NATIVE_PROCESS_NAME ||
             param.processName == ColorOsSidebarTarget.PROCESS_NAME
 
@@ -114,5 +116,8 @@ class ModuleMain : XposedModule() {
         const val TAG = "FlymeFreeform"
         const val PROCESS_SYSTEM_UI = "com.android.systemui"
         const val PROCESS_LAUNCHER = "com.android.launcher"
+
+        /** Pixel Launcher（AOSP 派生 ROM 的默认桌面进程）。 */
+        const val PROCESS_LAUNCHER_PIXEL = "com.google.android.apps.nexuslauncher"
     }
 }
