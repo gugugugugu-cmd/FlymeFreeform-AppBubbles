@@ -160,21 +160,29 @@ internal class SystemServerHookInstaller(
     /**
      * AMS.systemReady 已确认签名白名单。
      *
-     * 只接受语义明确、且在启动序列中确定会执行的形态：
-     *   systemReady()                              —— 旧版
-     *   systemReady(Runnable)                      —— 传入「系统就绪后回调」
-     *   systemReady(Runnable, ...)                 —— 后续版本在 Runnable 后追加参数
+     * 只接受以下已确认形态（逐项比对类型，不按个数猜）：
+     *   systemReady()                                                      —— 旧版
+     *   systemReady(Runnable)                                              —— 传入「系统就绪后回调」
+     *   systemReady(Runnable, TimingsTraceAndSlog)                          —— Android 17 实机命中
      *
-     * 共同点：首参必须是 Runnable（AOSP 用它在 systemReady 末尾执行启动收尾）。
-     * 早期 AOSP 还有 systemReady(ActivityManagerService) 等自引用形态，不属于该路径，
-     * 不应误选。参数个数相同不代表语义相同，因此逐项比对类型而非计数。
+     * 早期 AOSP 的 systemReady(ActivityManagerService) 等自引用形态不属于该路径，不应误选。
+     * 参数个数相同不代表语义相同。
      */
     private fun matchesKnownSystemReady(types: Array<Class<*>>): Boolean {
+        // Android 17 实机签名（2026-10-18 日志 line 56）：
+        //   (java.lang.Runnable, com.android.server.utils.TimingsTraceAndSlog)
+        // 第二参不是此前猜测的 boolean —— 白名单必须写实，不能靠「首参是 Runnable
+        // 且参数不多于 3」这种近似规则蒙对。
+        if (types.size == 2 &&
+            types[0] == Runnable::class.java &&
+            types[1].name == "com.android.server.utils.TimingsTraceAndSlog"
+        ) {
+            return true
+        }
+        // 旧版本形态，保留兼容
+        if (types.size == 1 && types[0] == Runnable::class.java) return true
         if (types.isEmpty()) return true
-        if (types[0] != Runnable::class.java) return false
-        // Runnable 之后的参数在新版本中允许出现（如 boolean 表示是否处于 boot phase），
-        // 但数量上限保守取 3，避免误配到无关重载。
-        return types.size <= 3
+        return false
     }
 
     private fun startOnce(
