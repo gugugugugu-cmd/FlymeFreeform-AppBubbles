@@ -38,7 +38,12 @@ internal class PixelBubbleTestEntry(
     fun start() {
         if (bound) return
         bound = true
+        // 绑定 BubbleController：
+        // 1) 先试主动反射（INSTANCE 单例 / LocalServices）
+        // 2) hook BubblesManager 构造器 + 事件回调兜底（阶段 1 验证过的
+        //    BubblesManager.mBubbles → this$0 → BubbleController 链）
         launcher.bindController()
+        installBubblesManagerCapture()
         val filter =
             IntentFilter().apply {
                 addAction(ACTION_TEST_LAUNCH_BUBBLE)
@@ -87,6 +92,75 @@ internal class PixelBubbleTestEntry(
             context.registerReceiver(receiver, filter)
         }
         module.log(Log.INFO, TAG, "PIXEL_BUBBLE_TEST_ENTRY_READY launcherAvailable=${launcher.isAvailable()}")
+    }
+
+    /**
+     * hook BubblesManager 以捕获 BubbleController 实例。
+     *
+     * A17 上 BubbleController 没有公开静态单例，阶段 1（MoreBubbleButton）验证的
+     * 可靠路径是事件链：BubblesManager.mBubbles (IBubblesImpl) → this$0 → BubbleController。
+     * 这里 hook 两个必然经过的点：
+     *   - BubblesManager 构造函数（SystemUI 启动即创建，最早拿到实例）
+     *   - BubblesManager.onUserChangedBubble(NotificationEntry, boolean)（阶段 1 已证存在）
+     * 任一命中即调用 launcher.bindFromBubblesManager() 完成绑定。
+     */
+    private fun installBubblesManagerCapture() {
+        try {
+            val cl = context.javaClass.classLoader ?: return
+            val bubblesCls = cl.loadClass("com.android.systemui.wmshell.BubblesManager")
+            // 构造器捕获（任意签名，命中即绑定）
+            for (ctor in bubblesCls.declaredConstructors) {
+                try {
+                    module
+                        .hook(ctor)
+                        .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.PROTECTIVE)
+                        .setId("flymefreeform.bubbles_manager_ctor")
+                        .intercept { chain ->
+                            val result = chain.proceed()
+                            try {
+                                // 构造器无 this，用返回值（新实例）绑定
+                                launcher.bindFromBubblesManager(result)
+                            } catch (_: Throwable) {
+                            }
+                            result
+                        }
+                    module.log(Log.INFO, TAG, "PIXEL_BUBBLE_BUBBLES_MANAGER_CTOR_HOOKED")
+                    break
+                } catch (_: Throwable) {
+                }
+            }
+            // 事件回调捕获（兜底）
+            for (m in bubblesCls.declaredMethods) {
+                val isUserChanged =
+                    m.name == "onUserChangedBubble" &&
+                        m.parameterCount == 2 &&
+                        m.parameterTypes[0].name.contains("NotificationEntry") &&
+                        m.parameterTypes[1] == java.lang.Boolean.TYPE
+                val isExpand =
+                    m.name == "expandStackAndSelectBubble" &&
+                        m.parameterCount == 1 &&
+                        m.parameterTypes[0].name.contains("NotificationEntry")
+                if (!isUserChanged && !isExpand) continue
+                try {
+                    module
+                        .hook(m)
+                        .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.PROTECTIVE)
+                        .setId("flymefreeform.bubbles_manager_capture_" + m.name)
+                        .intercept { chain ->
+                            val result = chain.proceed()
+                            try {
+                                launcher.bindFromBubblesManager(chain.thisObject)
+                            } catch (_: Throwable) {
+                            }
+                            result
+                        }
+                    module.log(Log.INFO, TAG, "PIXEL_BUBBLE_BUBBLES_MANAGER_EVENT_HOOKED ${m.name}")
+                } catch (_: Throwable) {
+                }
+            }
+        } catch (t: Throwable) {
+            module.log(Log.WARN, TAG, "PIXEL_BUBBLE_BUBBLES_MANAGER_HOOK_FAILED ${t.message}")
+        }
     }
 
     private fun resultStateName(result: BubbleLaunchResult): String =
