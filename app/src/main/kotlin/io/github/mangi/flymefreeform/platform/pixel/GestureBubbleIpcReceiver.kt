@@ -83,6 +83,15 @@ internal class GestureBubbleIpcReceiver(
                 val now = System.currentTimeMillis()
                 // 顺手清掉 60s 前的记录，避免无限增长
                 if (seen.size > 32) seen.values.removeIf { now - it > 60_000L }
+                // 安全验证夹具的 request_id 带固定前缀，单独打一条：内容仍是 INFO 级
+                // 正常日志，只是便于在导出日志里 grep，不需要额外的日志通道。
+                if (requestId.startsWith("forge-security-probe-")) {
+                    log(
+                        Log.WARN,
+                        "SECURITY_PROBE_PASSED id=$requestId target=${component.flattenToShortString()} " +
+                            "=== 广播穿透了权限限定，GESTURE_IPC 鉴权失效 ===",
+                    )
+                }
                 if (seen.putIfAbsent(requestId, now) != null) return
                 log(Log.INFO, "GESTURE_IPC_RECEIVED id=$requestId target=${component.flattenToShortString()} source=$source")
                 executor.execute { run(requestId, component, userId, source) }
