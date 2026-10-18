@@ -5,6 +5,7 @@ import android.content.Context
 import android.util.Log
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import io.github.mangi.flymefreeform.platform.pixel.PixelBubbleTestEntry
 import java.util.concurrent.atomic.AtomicBoolean
 
 @SuppressLint("PrivateApi")
@@ -58,6 +59,14 @@ internal class SystemUiHookInstaller(
             module.log(Log.WARN, TAG, "SYSTEMUI_CORNER_SPY_START_FAILED", exception)
         } catch (exception: LinkageError) {
             module.log(Log.WARN, TAG, "SYSTEMUI_CORNER_SPY_LINKAGE_FAILED", exception)
+        }
+        // 阶段 2：Pixel 原生 App Bubbles 开发测试入口（SystemUI 进程，BubbleController 所在处）。
+        // 不改手势 UI：外部通过广播 ACTION_TEST_LAUNCH_BUBBLE 提交 BubbleLaunchRequest。
+        try {
+            PixelBubbleTestEntry(context, module).start()
+            module.log(Log.INFO, TAG, "PIXEL_BUBBLE_TEST_ENTRY_STARTED")
+        } catch (exception: Throwable) {
+            module.log(Log.WARN, TAG, "PIXEL_BUBBLE_TEST_ENTRY_START_FAILED", exception)
         }
     }
 

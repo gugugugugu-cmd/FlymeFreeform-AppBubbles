@@ -32,6 +32,7 @@ import io.github.mangi.flymefreeform.gesture.CornerTriggerRegion
 import io.github.mangi.flymefreeform.gesture.GestureAction
 import io.github.mangi.flymefreeform.hook.ModuleEnvironmentState
 import io.github.mangi.flymefreeform.hook.ProcessConfiguration
+import io.github.mangi.flymefreeform.platform.common.AppLaunchCommitter
 import io.github.mangi.flymefreeform.window.CornerRadialOverlayView
 import java.lang.reflect.Proxy
 import java.util.concurrent.ArrayBlockingQueue
@@ -45,6 +46,12 @@ internal class ColorOsFreeformCoordinator(
     private val configuration: ProcessConfiguration,
     private val environmentState: ModuleEnvironmentState,
     private val logger: (priority: Int, code: String, throwable: Throwable?) -> Unit,
+    /**
+     * 平台无关提交接口（阶段 2 / 任务书 §5.2.1）。
+     * 默认 ColorOS 自由窗实现；Pixel 等其它平台可注入各自后端。
+     * 为 null 时回退为原 ColorOS 直接启动（保持既有行为）。
+     */
+    private val committer: AppLaunchCommitter? = null,
 ) : CornerRadialOverlayView.Listener {
     private val context = readField(controller, "mContext") as Context
     private val handler = Handler(Looper.getMainLooper())
@@ -476,7 +483,7 @@ internal class ColorOsFreeformCoordinator(
             }
             return
         }
-        when (val result = launcher.launch(entry.component)) {
+        when (val result = launchWithCommitter(entry.component)) {
             FreeformLaunchResult.Started -> publishRecentFreeform(entry.component)
             FreeformLaunchResult.TargetUnavailable ->
                 logger(Log.WARN, "FREEFORM_LAUNCH_TARGET_UNAVAILABLE", null)
@@ -484,6 +491,26 @@ internal class ColorOsFreeformCoordinator(
                 logger(Log.WARN, result.diagnosticCode, result.cause)
         }
     }
+
+    /** 平台无关提交：优先走注入的 committer，否则回退 ColorOS 直接启动。 */
+    private fun launchWithCommitter(component: ComponentName): FreeformLaunchResult {
+        val injected = committer
+        if (injected != null) {
+            val accepted = try {
+                injected.commit(component)
+            } catch (t: Throwable) {
+                logger(Log.WARN, "COMMITTER_CRASHED ${t.message}", t)
+                false
+            }
+            return if (accepted) FreeformLaunchResult.Started
+            else FreeformLaunchResult.Failed("COMMITTER_REJECTED", CommitterRejectedException(component.flattenToString()))
+        }
+        return launcher.launch(component)
+    }
+
+    /** committer 拒绝提交时的哨兵异常（Failed.cause 为非空 Throwable）。 */
+    private class CommitterRejectedException(component: String) :
+        RuntimeException("committer rejected: $component")
 
     /**
      * Hook 进程的框架远端配置是只读的（实测 `edit()` 抛 `UnsupportedOperationException`），
