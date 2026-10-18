@@ -57,6 +57,17 @@ internal object GestureBubbleIpcProtocol {
     /** 回执（SystemUI → system_server），定向发送。 */
     const val ACTION_COMMIT_ACK = "io.github.mangi.flymefreeform.action.GESTURE_COMMIT_ACK"
 
+    /**
+     * 收发双方共同持有的系统权限，用于框架级鉴权。
+     *
+     * 只有 system_server 以及同样持该权限的 SystemUI 能通过，
+     * 普通应用无法投递（分发阶段即被拦截），无需在 onReceive 里事后判 uid。
+     *
+     * 选择理由：getSentFromUid() 对普通广播恒返回 -1，曾据此做校验
+     * 导致所有合法请求被误拒。
+     */
+    const val PERMISSION_SEND = "android.permission.STATUS_BAR_SERVICE"
+
     /** 回执接收器所在包：system_server 的包名恒为 "android"。 */
     const val SYSTEM_SERVER_PACKAGE = "android"
 
@@ -116,7 +127,7 @@ internal object GestureBubbleIpcProtocol {
                 .putExtra(EXTRA_REQUEST_ID, requestId)
                 .putExtra(EXTRA_OUTCOME, outcome.name)
                 .putExtra(EXTRA_DIAGNOSTIC, diagnostic)
-        runCatching { context.sendBroadcast(intent) }
+        runCatching { context.sendBroadcast(intent, PERMISSION_SEND) }
             .onFailure { Log.w(TAG, "ack send failed: ${it.javaClass.simpleName}", it) }
     }
 
@@ -185,16 +196,10 @@ internal class GestureBubbleIpcClient(
                 val ackReceiver =
                     object : BroadcastReceiver() {
                         override fun onReceive(ctx: Context?, intent: Intent?) {
-                            // 回执同样要验来源：否则任意应用伪造 Accepted 即可欺骗协调器
-                            val senderUid = sentFromUidOrUnknown(this)
-                            if (!isTrustedAckSender(this, senderUid)) {
-                                logger(
-                                    Log.WARN,
-                                    "GESTURE_IPC_ACK_REJECTED senderUid=$senderUid",
-                                    null,
-                                )
-                                return
-                            }
+                            // 来源由注册时的 requiredPermission 保证（STATUS_BAR_SERVICE），
+                            // 不需要也无法在 onReceive 里事后判 uid：
+                            // getSentFromUid() 对普通广播恒返回 -1，曾据此拒绝导致
+                            // 合法回执全部被丢、请求一律超时。
                             val parsed = intent?.let(GestureBubbleIpcProtocol::readAck) ?: return
                             val (id, outcome, diagnostic) = parsed
                             logger(
@@ -213,10 +218,14 @@ internal class GestureBubbleIpcClient(
                     context.registerReceiver(
                         ackReceiver,
                         filter,
+                        GestureBubbleIpcProtocol.PERMISSION_SEND,
+                        null,
                         Context.RECEIVER_EXPORTED,
                     )
                 } else {
-                    context.registerReceiver(ackReceiver, filter)
+                    context.registerReceiver(
+                        ackReceiver, filter, GestureBubbleIpcProtocol.PERMISSION_SEND, null,
+                    )
                 }
                 receiverRegistered = true
                 logger(Log.INFO, "GESTURE_IPC_ACK_RECEIVER_READY", null)
@@ -314,7 +323,7 @@ internal class GestureBubbleIpcClient(
                     source = "radial-gesture",
                 )
             intent.setPackage(GestureBubbleIpcProtocol.SYSTEM_UI_PACKAGE)
-            context.sendBroadcast(intent)
+            context.sendBroadcast(intent, GestureBubbleIpcProtocol.PERMISSION_SEND)
             logger(Log.INFO, "GESTURE_IPC_SENT id=$requestId target=${component.flattenToShortString()}", null)
             true
         } catch (t: Throwable) {

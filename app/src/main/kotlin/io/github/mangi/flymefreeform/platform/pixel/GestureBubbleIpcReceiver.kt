@@ -53,19 +53,19 @@ internal class GestureBubbleIpcReceiver(
                 ) {
                     return
                 }
-                // 审查意见 P1：setPackage 只限目标包，不能证明来源可信。
-                // 读取发送方 uid，只接受 system_server(1000) / root(0)。
-                // 方法名见 sentFromUidOrUnknown() 注释（已用 android.jar 核对）。
-                val senderUid = sentFromUidOrUnknown(this)
-                if (!isTrustedSender(this, senderUid)) {
-                    log(Log.WARN, "GESTURE_IPC_REJECTED senderUid=$senderUid action=$action")
-                    intent.getStringExtra(GestureBubbleIpcProtocol.EXTRA_REQUEST_ID)?.let {
-                        GestureBubbleIpcProtocol.sendAck(
-                            context, it, GestureBubbleIpcProtocol.Outcome.Rejected, "untrusted-sender",
-                        )
-                    }
-                    return
-                }
+                // 来源可信性由注册时的 requiredPermission 保证：只有持有
+                // STATUS_BAR_SERVICE 的进程能发进来，普通应用广播在分发阶段就被拦掉，
+                // 根本不会进入本方法。
+                //
+                // 曾在此处用 getSentFromUid() 二次校验，并对 !=0/1000 一律拒绝——
+                // 真机实测该 API 对普通 sendBroadcast 恒返回 -1（发送者信息只在
+                // 携带 PendingIntent 转发时才填充），导致 system_server 自己发的
+                // 合法请求也被判 untrusted-sender 全量拒绝，气泡永远起不来。
+                // 权限限定是框架级校验，比事后读 uid 更强且可靠。
+                log(
+                    Log.INFO,
+                    "GESTURE_IPC_RECEIVED action=$action uid=${sentFromUidOrUnknown(this)}",
+                )
                 val component = GestureBubbleIpcProtocol.parseComponent(intent)
                 val requestId = intent.getStringExtra(GestureBubbleIpcProtocol.EXTRA_REQUEST_ID)
                 if (component == null || requestId == null) {
@@ -193,16 +193,22 @@ internal class GestureBubbleIpcReceiver(
             val handler = android.os.Handler(looper)
             // 5 参重载 registerReceiver(receiver, filter, permission, scheduler, flags)
             // 同时满足：绑定独立线程 + 显式导出状态（签名经 android.jar javap 核对）
+            // 发送方权限限定：只有持有 STATUS_BAR_SERVICE 的进程（system_server，
+            // 以及同样持该权限的 SystemUI 自身）能发进来。
+            // 这样鉴权由框架在分发时完成，不再依赖 getSentFromUid()——
+            // 后者对普通广播恒返回 -1（真机日志 senderUid=-1 即此原因），
+            // 因为它只对携带 PendingIntent 发送者信息的广播有效。
+            val requiredPermission = GestureBubbleIpcProtocol.PERMISSION_SEND
             if (android.os.Build.VERSION.SDK_INT >= 33) {
                 context.registerReceiver(
                     receiver,
                     filter,
-                    null,
+                    requiredPermission,
                     handler,
                     android.content.Context.RECEIVER_EXPORTED,
                 )
             } else {
-                context.registerReceiver(receiver, filter, null, handler)
+                context.registerReceiver(receiver, filter, requiredPermission, handler)
             }
             registered = true
             log(Log.INFO, "GESTURE_IPC_RECEIVER_READY")
