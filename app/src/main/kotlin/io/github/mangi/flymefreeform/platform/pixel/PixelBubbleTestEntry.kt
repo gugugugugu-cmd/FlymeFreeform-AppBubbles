@@ -54,8 +54,20 @@ internal class PixelBubbleTestEntry(
                 // 兼容历史文档命令（io.github.mangi.flymefreeform.ACTION_TEST_LAUNCH_BUBBLE）
                 addAction(ACTION_TEST_LAUNCH_BUBBLE_LEGACY)
             }
+        // 具名内部类：需要读取 getSendingUid()（API 34+），用反射调用以便低于 34 也能编译运行
         receiver =
             object : BroadcastReceiver() {
+                // BroadcastReceiver.getSendingUid() 为 API 34+ 的 public final 方法，
+                // 走反射以便在低版本上安全降级为「未知(-1)」。
+                private fun sendingUidOrUnknown(): Int =
+                    try {
+                        BroadcastReceiver::class.java
+                            .getMethod("getSendingUid")
+                            .invoke(this) as Int
+                    } catch (_: Throwable) {
+                        -1
+                    }
+
                 override fun onReceive(context: Context, intent: Intent) {
                     if (intent.action != ACTION_TEST_LAUNCH_BUBBLE &&
                         intent.action != ACTION_TEST_LAUNCH_BUBBLE_LEGACY
@@ -63,7 +75,7 @@ internal class PixelBubbleTestEntry(
                         return
                     }
                     // 发送方 uid（Android 14+ 提供；低版本返回 -1 表示未知，按不可信处理）
-                    val senderUid = sendingUid
+                    val senderUid = sendingUidOrUnknown()
                     if (!isTrustedCaller(senderUid)) {
                         module.log(Log.WARN, TAG, "PIXEL_BUBBLE_TEST_REJECTED senderUid=$senderUid")
                         return
