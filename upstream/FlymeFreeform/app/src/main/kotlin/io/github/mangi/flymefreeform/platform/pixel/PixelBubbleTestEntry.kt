@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.os.UserHandle
 import android.util.Log
 import io.github.libxposed.api.XposedModule
@@ -78,7 +79,13 @@ internal class PixelBubbleTestEntry(
                     )
                 }
             }
-        context.registerReceiver(receiver, filter)
+        // Android 14+（API 34+）：动态注册非系统广播必须显式指定 exported 标志。
+        // 测试入口需要接收 adb / 外部进程广播，故用 RECEIVER_EXPORTED。
+        if (Build.VERSION.SDK_INT >= 34) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            context.registerReceiver(receiver, filter)
+        }
         module.log(Log.INFO, TAG, "PIXEL_BUBBLE_TEST_ENTRY_READY launcherAvailable=${launcher.isAvailable()}")
     }
 
