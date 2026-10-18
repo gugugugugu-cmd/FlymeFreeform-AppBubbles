@@ -2,7 +2,6 @@ package io.github.mangi.flymefreeform
 
 import android.util.Log
 import io.github.libxposed.api.XposedInterface
-import io.github.mangi.flymefreeform.platform.pixel.bubble.BubbleEntryPoints
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
 import io.github.mangi.flymefreeform.hook.LauncherHookInstaller
@@ -10,6 +9,8 @@ import io.github.mangi.flymefreeform.hook.NativeSidebarHookInstaller
 import io.github.mangi.flymefreeform.hook.ProcessConfiguration
 import io.github.mangi.flymefreeform.hook.SidebarHookInstaller
 import io.github.mangi.flymefreeform.platform.coloros.ColorOsSidebarTarget
+import io.github.mangi.flymefreeform.platform.pixel.bubble.installBubbleLauncherHooks
+import io.github.mangi.flymefreeform.platform.pixel.bubble.installBubbleSystemUiHooks
 import io.github.mangi.flymefreeform.hook.SystemServerHookInstaller
 import io.github.mangi.flymefreeform.hook.SystemUiHookInstaller
 
@@ -84,14 +85,14 @@ class ModuleMain : XposedModule() {
             processName == PROCESS_SYSTEM_UI && param.packageName == PROCESS_SYSTEM_UI -> {
                 hooksInstalled = true
                 SystemUiHookInstaller(this, settings).install(param.classLoader)
-                BubbleEntryPoints.installSystemUi(this, settings, param.classLoader)
+                installBubbleSystemUiHooks(this, param.classLoader, settings)
             }
 
             processName == PROCESS_LAUNCHER && param.packageName == PROCESS_LAUNCHER ||
                 processName == PROCESS_LAUNCHER_PIXEL && param.packageName == PROCESS_LAUNCHER_PIXEL -> {
                 hooksInstalled = true
                 LauncherHookInstaller(this, settings).install(param.classLoader)
-                BubbleEntryPoints.installLauncher(this, settings, param.classLoader)
+                installBubbleLauncherHooks(this, param.classLoader, settings)
             }
         }
     }
