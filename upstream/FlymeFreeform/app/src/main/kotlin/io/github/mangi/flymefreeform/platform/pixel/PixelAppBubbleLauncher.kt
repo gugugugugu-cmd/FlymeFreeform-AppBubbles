@@ -40,6 +40,22 @@ internal class PixelAppBubbleLauncher(
     private val context: Context,
 ) : AppBubbleLauncher {
 
+    /**
+     * 诊断日志出口。LSPosed 模块进程里 android.util.Log 不会进入模块日志文件，
+     * 必须走 module.log()；TestEntry 在构造时注入。
+     */
+    var debugSink: ((String) -> Unit)? = null
+
+    private fun dbg(msg: String) {
+        android.util.Log.i(TAG, msg)
+        runCatching { debugSink?.invoke(msg) }
+    }
+
+    private fun dbgWarn(msg: String) {
+        android.util.Log.w(TAG, msg)
+        runCatching { debugSink?.invoke("WARN $msg") }
+    }
+
     private var controller: Any? = null
 
     /**
@@ -50,7 +66,7 @@ internal class PixelAppBubbleLauncher(
         controller = try {
             resolveBubbleController()
         } catch (t: Throwable) {
-            Log.w(TAG, "resolveBubbleController failed: ${t.message}")
+            dbgWarn("resolveBubbleController failed: ${t.message}")
             null
         }
         return controller != null
@@ -62,7 +78,7 @@ internal class PixelAppBubbleLauncher(
     fun setController(ctl: Any) {
         if (ctl.javaClass.name.contains("BubbleController")) {
             controller = ctl
-            Log.i(TAG, "setController: controller bound (${ctl.javaClass.name})")
+            dbg("setController: controller bound (${ctl.javaClass.name})")
         }
     }
 
@@ -79,10 +95,10 @@ internal class PixelAppBubbleLauncher(
             val ctl = findField(bubblesImpl, "this\$0") ?: return
             if (ctl.javaClass.name.contains("BubbleController")) {
                 controller = ctl
-                Log.i(TAG, "bindFromBubblesManager: controller bound")
+                dbg("bindFromBubblesManager: controller bound")
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "bindFromBubblesManager failed: ${t.message}")
+            dbgWarn("bindFromBubblesManager failed: ${t.message}")
         }
     }
 
@@ -97,10 +113,10 @@ internal class PixelAppBubbleLauncher(
             val ctl = findField(impl, "this\$0") ?: return
             if (ctl.javaClass.name.contains("BubbleController")) {
                 controller = ctl
-                Log.i(TAG, "bindFromIBubblesImpl: controller bound")
+                dbg("bindFromIBubblesImpl: controller bound")
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "bindFromIBubblesImpl failed: ${t.message}")
+            dbgWarn("bindFromIBubblesImpl failed: ${t.message}")
         }
     }
 
@@ -136,10 +152,10 @@ internal class PixelAppBubbleLauncher(
                     val done = expandAppBubbleA17(ctl, intent, user)
                     if (!done) {
                         val legacyDone = expandAppBubbleLegacy(ctl, intent, user)
-                        Log.i(TAG, "BUBBLE_EXPAND legacyDone=$legacyDone")
+                        dbg("BUBBLE_EXPAND legacyDone=$legacyDone")
                     }
                 } catch (t: Throwable) {
-                    Log.w(TAG, "BUBBLE_EXPAND failed: ${t.message}", t)
+                    dbgWarn("BUBBLE_EXPAND failed: ${t.javaClass.simpleName}: ${t.message}")
                 }
             }
         return try {
@@ -148,14 +164,14 @@ internal class PixelAppBubbleLauncher(
                 BubbleLaunchResult.BubbleRequestSubmitted
             } else {
                 // 拿不到主线程执行器时退回直接调用（至少拿到诊断日志）
-                Log.w(TAG, "BUBBLE_EXPAND no mMainExecutor, running inline")
+                dbgWarn("BUBBLE_EXPAND no mMainExecutor, running inline")
                 val done = expandAppBubbleA17(ctl, intent, user)
                 if (done) BubbleLaunchResult.BubbleRequestSubmitted
                 else if (expandAppBubbleLegacy(ctl, intent, user)) BubbleLaunchResult.BubbleRequestSubmitted
                 else BubbleLaunchResult.ExpandFailed
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "launch failed: ${t.message}")
+            dbgWarn("launch failed: ${t.message}")
             BubbleLaunchResult.ExpandFailed
         }
     }
@@ -201,7 +217,7 @@ internal class PixelAppBubbleLauncher(
         user: UserHandle,
     ): Boolean {
         try {
-            val cl = controller.javaClass.classLoader ?: run { Log.w(TAG, "BUBBLE_A17 step1 miss")
+            val cl = controller.javaClass.classLoader ?: run { dbgWarn("BUBBLE_A17 step1 miss")
                         return false }
             val bubbleCls = cl.loadClass("com.android.wm.shell.bubbles.Bubble")
             val dataCls = cl.loadClass("com.android.wm.shell.bubbles.BubbleData")
@@ -217,29 +233,30 @@ internal class PixelAppBubbleLauncher(
                     bubbleCls,
                     epCls,
                     reqCls,
-                ) ?: run { Log.w(TAG, "BUBBLE_A17 step2 miss")
+                ) ?: run { dbgWarn("BUBBLE_A17 step2 miss")
                         return false }
 
-            val data = findField(controller, "mBubbleData") ?: run { Log.w(TAG, "BUBBLE_A17 step3 miss")
+            val data = findField(controller, "mBubbleData") ?: run { dbgWarn("BUBBLE_A17 step3 miss")
                         return false }
-            val pkg = intent.getPackage() ?: run { Log.w(TAG, "BUBBLE_A17 step4 miss")
+            val pkg = intent.getPackage() ?: run { dbgWarn("BUBBLE_A17 step4 miss")
                         return false }
 
             val keyForApp =
                 findMethod(bubbleCls, "getAppBubbleKeyForApp", String::class.java, UserHandle::class.java)
-                    ?: run { Log.w(TAG, "BUBBLE_A17 step5 miss")
+                    ?: run { dbgWarn("BUBBLE_A17 step5 miss")
                         return false }
-            val key = keyForApp.invoke(null, pkg, user) as? String ?: run { Log.w(TAG, "BUBBLE_A17 step6 miss")
+            val key = keyForApp.invoke(null, pkg, user) as? String ?: run { dbgWarn("BUBBLE_A17 step6 miss")
                         return false }
 
             val findOverflow =
                 findMethod(dataCls, "findAndRemoveBubbleFromOverflow", String::class.java)
             var bubble = findOverflow?.invoke(data, key)
+            var bubbleWasFromOverflow = bubble != null
 
             if (bubble == null) {
-                val typeApp = enumConstant(typeCls, "TYPE_APP") ?: run { Log.w(TAG, "BUBBLE_A17 step7 miss")
+                val typeApp = enumConstant(typeCls, "TYPE_APP") ?: run { dbgWarn("BUBBLE_A17 step7 miss")
                         return false }
-                val dataCtx = findField(data, "mContext") as? Context ?: run { Log.w(TAG, "BUBBLE_A17 step8 miss")
+                val dataCtx = findField(data, "mContext") as? Context ?: run { dbgWarn("BUBBLE_A17 step8 miss")
                         return false }
                 val pm =
                     findMethod(controller.javaClass, "getPackageManagerForUser", Integer.TYPE, Context::class.java)
@@ -266,7 +283,7 @@ internal class PixelAppBubbleLauncher(
                 }
                 val ctor =
                     findConstructor(bubbleCls, Intent::class.java, UserHandle::class.java, Icon::class.java, typeCls, String::class.java)
-                        ?: run { Log.w(TAG, "BUBBLE_A17 step9 miss")
+                        ?: run { dbgWarn("BUBBLE_A17 step9 miss")
                         return false }
                 bubble = ctor.newInstance(intent, user, icon, typeApp, key)
             }
@@ -274,13 +291,28 @@ internal class PixelAppBubbleLauncher(
 
             val entryPoint = enumConstant(epCls, "NOTIFICATION_BUBBLE_BUTTON")
                 ?: enumConstant(epCls, "NOTIFICATION")
-                ?: run { Log.w(TAG, "BUBBLE_A17 step10 miss")
+                ?: run { dbgWarn("BUBBLE_A17 step10 miss")
                         return false }
 
+            dbg("BUBBLE_A17 bubble fromOverflow=${bubbleWasFromOverflow} key=$key type=${bubble!!.javaClass.name}")
             expand.invoke(controller, bubble, entryPoint, null)
+            // 观测：调用后数据模型状态（区分"没进模型"vs"进了没渲染"）
+            try {
+                val cnt = runCatching {
+                    data.javaClass.getMethod("getBubbles").also { it.isAccessible = true }.invoke(data) as? List<*>
+                }.getOrNull()
+                val expanded = runCatching {
+                    data.javaClass.getMethod("isExpanded").also { it.isAccessible = true }.invoke(data)
+                }.getOrNull()
+                dbg(
+                    "BUBBLE_A17 after-expand bubbles=${cnt?.size} expanded=$expanded " +
+                        "selected=${cnt?.any { it === bubble }}",
+                )
+            } catch (_: Throwable) {
+            }
             return true
         } catch (t: Throwable) {
-            Log.w(TAG, "BUBBLE_A17 failed: ${t.javaClass.simpleName}: ${t.message}", t)
+            dbgWarn("BUBBLE_A17 failed: ${t.javaClass.simpleName}: ${t.message}")
             return false
         }
     }
@@ -327,7 +359,7 @@ internal class PixelAppBubbleLauncher(
             expand.invoke(controller, intent, user, entryPoint, null)
             return true
         } catch (t: Throwable) {
-            Log.w(TAG, "expandAppBubbleLegacy failed: ${t.message}")
+            dbgWarn("expandAppBubbleLegacy failed: ${t.message}")
             return false
         }
     }
