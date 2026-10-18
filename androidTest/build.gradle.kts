@@ -45,8 +45,6 @@ android {
     }
 }
 
-dependencies {
-    // 平台自带的 AndroidJUnitRunner / JUnit4，不引入任何额外依赖：
-    // 夹具与目标设备同 API 级别（37），没有必要为了一次验证去拉 androidx.test。
-    // 用 `adb shell am instrument -w <pkg>/androidx.test.runner.AndroidJUnitRunner`
-    // 或直接 `am instrument -w -e class ...` 触发。
+// 无 dependencies 块：夹具只用 android.jar 与平台自带的
+// android.test.InstrumentationTestRunner + JUnit4，不引入 androidx.test。
+// 运行方式见 docs/PHASE5_SECURITY_PROBE.md §5。
