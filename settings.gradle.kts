@@ -24,4 +24,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "FlymeFreeform"
 include(":app")
+include(":androidTest")
  
