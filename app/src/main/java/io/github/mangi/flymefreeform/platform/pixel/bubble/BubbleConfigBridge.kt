@@ -1,0 +1,33 @@
+package io.github.mangi.flymefreeform.platform.pixel.bubble
+
+import io.github.libxposed.api.XposedModule
+import io.github.mangi.flymefreeform.hook.ProcessConfiguration
+
+/** Fabric 与气泡 hook 之间的桥接：Java 侧不依赖 Kotlin 默认参数与 internal 可见性。 */
+internal class BubbleConfigBridge(
+    private val configuration: ProcessConfiguration,
+) : BubbleModuleSettings.BubbleConfigSource {
+    override fun isTaskMenuEnabled(): Boolean = configuration.snapshot.taskMenuEnabled
+
+    override fun isActionBarEnabled(): Boolean = configuration.snapshot.actionBarEnabled
+
+    override fun isSystemUiBubbleEnabled(): Boolean = configuration.snapshot.systemUiBubbleEnabled
+}
+
+/** 在 SystemUI 进程里安装气泡 hook。 */
+internal fun installBubbleSystemUiHooks(
+    module: XposedModule,
+    classLoader: ClassLoader,
+    configuration: ProcessConfiguration,
+) {
+    BubbleHooks(module, BubbleConfigBridge(configuration)).hookSystemUi(classLoader)
+}
+
+/** 在桌面进程里安装气泡 hook。 */
+internal fun installBubbleLauncherHooks(
+    module: XposedModule,
+    classLoader: ClassLoader,
+    configuration: ProcessConfiguration,
+) {
+    BubbleHooks(module, BubbleConfigBridge(configuration)).hookLauncher(classLoader)
+}

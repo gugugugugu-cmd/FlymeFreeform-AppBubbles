@@ -2,6 +2,7 @@ package io.github.mangi.flymefreeform
 
 import android.util.Log
 import io.github.libxposed.api.XposedInterface
+import io.github.mangi.flymefreeform.platform.pixel.bubble.BubbleEntryPoints
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface
 import io.github.mangi.flymefreeform.hook.LauncherHookInstaller
@@ -83,12 +84,14 @@ class ModuleMain : XposedModule() {
             processName == PROCESS_SYSTEM_UI && param.packageName == PROCESS_SYSTEM_UI -> {
                 hooksInstalled = true
                 SystemUiHookInstaller(this, settings).install(param.classLoader)
+                BubbleEntryPoints.installSystemUi(this, settings, param.classLoader)
             }
 
             processName == PROCESS_LAUNCHER && param.packageName == PROCESS_LAUNCHER ||
                 processName == PROCESS_LAUNCHER_PIXEL && param.packageName == PROCESS_LAUNCHER_PIXEL -> {
                 hooksInstalled = true
                 LauncherHookInstaller(this, settings).install(param.classLoader)
+                BubbleEntryPoints.installLauncher(this, settings, param.classLoader)
             }
         }
     }
