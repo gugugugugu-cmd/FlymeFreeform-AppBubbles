@@ -148,7 +148,11 @@ internal class PixelAppBubbleLauncher(
         val mainExecutor = mainExecutorOf(ctl)
         if (mainExecutor == null) {
             dbgWarn("BUBBLE_EXPAND no mMainExecutor, running inline")
-            return inlineExpand(ctl, intent, user)
+            return if (inlineExpand(ctl, intent, user)) {
+                BubbleLaunchResult.BubbleRequestSubmitted
+            } else {
+                BubbleLaunchResult.ExpandFailed
+            }
         }
         // 同步等待主线程执行结果（最多 2s），避免异步分支一律报 SUBMITTED 造成假成功。
         val latch = java.util.concurrent.CountDownLatch(1)
