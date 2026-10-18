@@ -108,7 +108,7 @@ e2（Activity 形态）待实机执行。
 
 ---
 
-## 8. e1 失败复盘：`Process crashed`
+## 8. 夹具构建过程回顾
 
 第一次实测：
 
@@ -154,3 +154,31 @@ ZygoteInit.main → handleBindApplication → Instrumentation.newApplication
 发送方在自己的进程里，接收方的日志在另一个进程里——**证据链是分开的**，
 这比 instrumentation 里「同一个进程既发送又报告」要干净。
 
+---
+
+## 9. e2 失败复盘：`ClassNotFoundException`
+
+```
+java.lang.ClassNotFoundException:
+  Didn't find class "io.github.mangi.flymefreeform.forge.forge.ForgeActivity"
+```
+
+根因：`namespace = "io.github.mangi.flymefreeform.forge"` 已经包含 `forge`，
+清单里又写成 `android:name=".forge.ForgeActivity"`，前导点按 namespace 展开后
+成了 `...forge.forge.ForgeActivity`。改成 `.ForgeActivity` 即可。
+
+e2 里 Activity 类本身是对的（`package ...flymefreeform.forge;`），只有清单声明错。
+这次是在 APK 里直接比对 dex 字符串确认的，不再只靠清单反解。
+
+## 10. 夹具构建记录汇总
+
+| 构建 | commit | CI | 结果 | 原因 |
+|---|---|---|---|---|
+| forge-1 | `52b5475` | `39139933756` | 失败 | `build.gradle.kts` 注释吞掉闭合花括号 |
+| forge-2 | `26fdb5a` | `39140352695` | 失败 | 缺 `src/main/AndroidManifest.xml` |
+| forge-3 | `28261022` | `39140635062` | 失败 | `org.junit.Test` 无处解析 |
+| forge-4 | `b85bfa95` | `39140940590` | 构建成功，运行崩溃 | `am instrument` 加载模块 Application → NPE |
+| e2 | `ec5a1e7` | `39142367291` | 构建成功，运行崩溃 | 清单类名多一层 `.forge` |
+| **e3** | `7679264` | `39142862043` | **待实机** | — |
+
+夹具外的大版本（FlymeFreeform 本体）在这六轮里**一次都没有被改动**。
