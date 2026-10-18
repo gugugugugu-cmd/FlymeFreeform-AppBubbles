@@ -7,16 +7,12 @@
  * 这是纯 Java 的 Instrumentation 测试，不用 Compose、不用 Kotlin 标准库，
  * 避免把验证夹具本身变成又一个构建依赖。
  *
- * 判据（两条都要满足才算"被拦下"）：
- *   1. 伪造广播发出后 SystemUI 模块日志里**没有新增** GESTURE_IPC_RECEIVED
- *   2. 伪造广播发出后 SystemUI 模块日志里**也没有** GESTURE_IPC_BAD_REQUEST
+ * 判据（见 docs/PHASE5_SECURITY_PROBE.md §4）：
+ *   - 日志里出现 GESTURE_IPC_RECEIVED id=forge-security-probe-* → 失败，权限未生效
+ *   - 出现无 id 的 GESTURE_IPC_BAD_REQUEST                 → 存疑，请求到了接收端
+ *   - 两者都没有，且**有**合法手势留下的 GESTURE_IPC_RECEIVED → 通过
  *
- * 只有第 1 条而没有第 2 条是不够的：那只能说明请求被解析失败，不能说明被权限拦下。
- * 反过来，如果两条里任何一条出现，说明权限限定没有生效，属于安全缺陷。
- *
- * 对照组：同一个夹具先从**本应用自己**的进程发一条假广播（必然被拦），
- * 再请用户在模块里正常触发一次手势（必然不被拦），用后者证明这份日志管道本身是通的。
- * 没有对照组的话，"日志里没有记录"可能只是日志没写进去。
+ * 对照组是必需的：只看到"没有记录"无法排除日志管道本身不通。
  */
 
 package io.github.mangi.flymefreeform.forge;
@@ -27,12 +23,10 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
 
-import org.junit.Test;
-
 /*
- * 不用 androidx.test：夹具只需要一个 Context，而已安装测试包的 Instrumentation
- * 注册里自带一个无参构造的 Instrumentation 实例，直接用受保护静态方法取即可。
- * 这样夹具 APK 只依赖 android.jar + 平台自带 JUnit4，构建面最小。
+ * 编译依赖只有 android.jar：
+ *   - 用例靠 `test` 前缀方法名被 instrumentation 反射发现，不用 @Test
+ *   - Context 走 ActivityThread.currentApplication()，不用 androidx.test
  */
 public class ForgeBroadcastTest {
 
@@ -51,8 +45,11 @@ public class ForgeBroadcastTest {
     /** 伪造请求的固定前缀，方便在 SystemUI 日志里 grep。 */
     private static final String FORGE_PREFIX = "forge-security-probe-";
 
-    @Test
-    public void forgedCommitBroadcastMustBeBlocked() {
+    /**
+     * 方法名必须以 test 开头：instrumentation 用 java.lang.reflect 查找用例，
+     * 不依赖 JUnit 注解，这样夹具的编译依赖只剩 android.jar。
+     */
+    public void testForgedCommitBroadcastMustBeBlocked() {
         // `am instrument` 启动夹具进程后会先建好 Application，
         // 进程里必然已有 Application 实例可拿；这里用反射走
         // ActivityThread.currentApplication()，避免依赖 androidx.test。
