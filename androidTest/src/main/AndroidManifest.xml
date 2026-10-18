@@ -15,7 +15,7 @@
         android:supportsRtl="true">
 
         <activity
-            android:name=".forge.ForgeActivity"
+            android:name=".ForgeActivity"
             android:exported="true"
             android:label="FlymeFreeform Forge">
             <intent-filter>
