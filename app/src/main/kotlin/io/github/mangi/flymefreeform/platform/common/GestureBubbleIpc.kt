@@ -1,13 +1,20 @@
 package io.github.mangi.flymefreeform.platform.common
 
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Bundle
 import android.util.Log
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
- * `system_server → SystemUI` 的手势提交通道（阶段 2 P0 整改）。
+ * `system_server → SystemUI` 的手势提交通道（阶段 2 收尾）。
  *
  * ## 为什么必须跨进程
  *
@@ -16,50 +23,45 @@ import android.util.Log
  *  - 协调器：system_server
  *  - `BubbleController` / `PixelAppBubbleLauncher`：SystemUI
  *
- * `BubbleController` 是 SystemUI 进程内的对象，system_server 既拿不到也不该拿。
- * 早期实现把 `PixelBubbleLaunchCommitter` 当普通对象注入协调器，是**跨进程直接调用**，
- * 在真机上不可能生效。因此改为：
+ * ## 全异步（审查意见 P0）
  *
- * ```
- * system_server                      SystemUI
- * 扇形选中 → GestureBubbleIpcClient ──(finalize/in-process 广播)──▶
- *                                    GestureBubbleIpcReceiver
- *                                      → PixelLauncherExecutor（独立线程）
- *                                        → PixelAppBubbleLauncher.launch()
- *                                    ◀──(ACK 广播，定向回 system_server)──
- * ```
+ * 早期版本在调用线程上阻塞等待 ACK。协调器的 `onAppCommitted` 跑在
+ * **system_server 主线程**（`Handler(Looper.getMainLooper())`），阻塞 3 秒
+ * 等于冻结整个系统的主线程调度。
  *
- * ## 结果语义（对应审查意见 P1）
+ * 因此本通道**没有任何阻塞等待**：
+ *  - 请求发出后立即返回；
+ *  - 结果通过 [GestureBubbleIpcClient.submit] 的回调在后台线程送达；
+ *  - 超时由独立的调度线程判定。
  *
- * 提交结果用 [Outcome] 三分，不再用 `Boolean` 把「已提交」和「已显示」混为一谈：
- *  - [Outcome.Accepted]：SystemUI 确认请求已交给 `BubbleController`（可接受回退口径）
- *  - [Outcome.Rejected]：明确失败，system_server 可以安全回退原生启动
+ * ## 结果语义
+ *
+ * 提交结果用 [Outcome] 三分：
+ *  - [Outcome.Accepted]：SystemUI 确认请求已交给 `BubbleController`
+ *  - [Outcome.Rejected]：明确失败，可安全回退原生启动
  *  - [Outcome.Unknown]：超时 / 通道不可用，**不得**重试或回退，避免重复开窗
  *
- * 注意 [Outcome.Accepted] 也不等于「气泡已经显示并可展开」——那需要后续观察
- * `BubbleController.mBubbles` 状态，属于实机验收项，不在本通道的承诺范围内。
+ * [Outcome.Accepted] 也不等于「气泡已显示并可展开」——后者需观察
+ * `BubbleController.mBubbles` 状态，属于实机验收项。
  */
 internal object GestureBubbleIpcProtocol {
 
-    /**
-     * 手势提交请求（system_server → SystemUI）。
-     *
-     * 用 `finalize` 变体（部分 ROM 才会隐式加上 `Intent.EXTRA_USER_HANDLE`），
-     * 使广播**顺序投递**到 SystemUI，避免与 onReceive 中拉起动作的竞态。
-     */
+    /** 手势提交请求（system_server → SystemUI）。 */
     const val ACTION_COMMIT = "io.github.mangi.flymefreeform.action.GESTURE_COMMIT"
 
     /**
-     * 同一请求的 `finalize` 变体：投递完成时触发一次，用于兜底「顺序投递被拦」的 ROM。
-     * 与 [ACTION_COMMIT] 共用 payload，接收端幂等（按 requestId 去重）。
+     * 同一请求的 `finalize` 变体：顺序投递兜底，接收端按 requestId 幂等。
      */
     const val ACTION_COMMIT_FINALIZE = "io.github.mangi.flymefreeform.action.GESTURE_COMMIT_FINALIZE"
 
-    /** 回执（SystemUI → system_server），定向发送到 system_server，不带 payload 解析负担。 */
+    /** 回执（SystemUI → system_server），定向发送。 */
     const val ACTION_COMMIT_ACK = "io.github.mangi.flymefreeform.action.GESTURE_COMMIT_ACK"
 
     /** 回执接收器所在包：system_server 的包名恒为 "android"。 */
     const val SYSTEM_SERVER_PACKAGE = "android"
+
+    /** SystemUI 包名。 */
+    const val SYSTEM_UI_PACKAGE = "com.android.systemui"
 
     const val EXTRA_COMPONENT = "component"
     const val EXTRA_USER_ID = "user_id"
@@ -68,7 +70,7 @@ internal object GestureBubbleIpcProtocol {
     const val EXTRA_OUTCOME = "outcome"
     const val EXTRA_DIAGNOSTIC = "diagnostic"
 
-    /** 提交结果三分语义，见类注释。 */
+    /** 提交结果三分语义。 */
     enum class Outcome {
         /** 请求已交给 BubbleController（不代表气泡已可见）。 */
         Accepted,
@@ -86,14 +88,6 @@ internal object GestureBubbleIpcProtocol {
         }
     }
 
-    /** 把协议层的 [Outcome] 映射为后端结果状态，便于统一日志与测试断言。 */
-    fun toBubbleResult(outcome: Outcome): BubbleLaunchResult =
-        when (outcome) {
-            Outcome.Accepted -> BubbleLaunchResult.BubbleRequestSubmitted
-            Outcome.Rejected -> BubbleLaunchResult.BackendUnavailable
-            Outcome.Unknown -> BubbleLaunchResult.SubmissionTimeout
-        }
-
     fun buildRequestIntent(
         component: ComponentName,
         userId: Int,
@@ -109,12 +103,7 @@ internal object GestureBubbleIpcProtocol {
     fun parseComponent(intent: Intent): ComponentName? =
         intent.getStringExtra(EXTRA_COMPONENT)?.let(ComponentName::unflattenFromString)
 
-    /**
-     * 定向发送到 system_server。
-     *
-     * system_server 的动态接收器不受「隐式广播限制」影响，
-     * 显式 setPackage("android") 即可送达，无需额外权限。
-     */
+    /** 定向发送到 system_server，携带三态结果。 */
     fun sendAck(
         context: Context,
         requestId: String,
@@ -131,7 +120,7 @@ internal object GestureBubbleIpcProtocol {
             .onFailure { Log.w(TAG, "ack send failed: ${it.javaClass.simpleName}", it) }
     }
 
-    /** 供 system_server 侧解析回执（校验 requestId 后取结果）。 */
+    /** 解析回执。 */
     fun readAck(intent: Intent): Triple<String, Outcome, String?>? {
         val id = intent.getStringExtra(EXTRA_REQUEST_ID) ?: return null
         return Triple(
@@ -141,7 +130,7 @@ internal object GestureBubbleIpcProtocol {
         )
     }
 
-    /** Bundle 用法保留给以后可能出现的 binder 化实现，当前未使用。 */
+    /** 保留给以后可能出现的 binder 化实现。 */
     @Suppress("unused")
     fun bundleOf(component: ComponentName, userId: Int): Bundle =
         Bundle().apply {
@@ -153,11 +142,14 @@ internal object GestureBubbleIpcProtocol {
 }
 
 /**
- * system_server 侧的手势提交客户端。
+ * system_server 侧的手势提交客户端（**全异步**）。
  *
- * 广播是单向的，因此实现方式为：发送请求 → 阻塞等待定向回执（带超时）。
- * 等待发生在协调器的 `handler` 线程（`launchCommittedApp` 的 post 目标），
- * 不是 SystemUI 主线程，不会出现「自己等自己」的死锁。
+ * - [commit]（[AppLaunchCommitter] 接口）：只发不等，返回 true 表示请求已发出；
+ *   用于无需区分回退的场景。
+ * - [submit]：发请求 + 结果回调，回调可能来自 Binder/主线程之外的后台线程，
+ *   调用方应自行切回需要的线程。返回的 [Handle] 可主动取消。
+ *
+ * 回执接收器注册失败后会**重试**（见 [ensureReceiver]），失败有独立诊断码。
  */
 internal class GestureBubbleIpcClient(
     private val context: Context,
@@ -167,84 +159,149 @@ internal class GestureBubbleIpcClient(
 
     private val logger: (priority: Int, code: String, error: Throwable?) -> Unit = logger
 
-    private val pending = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ArrayBlockingQueue<GestureBubbleIpcProtocol.Outcome>>()
+    /** requestId → 待决请求（含超时任务）。 */
+    private val pending = ConcurrentHashMap<String, Pending>()
+
+    /** 超时调度：独立单线程，不占用任何主线程。 */
+    private val scheduler: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "flyme-gesture-ipc-timeout").apply { isDaemon = true }
+        }
+
+    @Volatile
     private var receiverRegistered = false
 
-    private fun ensureReceiver() {
-        if (receiverRegistered) return
-        receiverRegistered = true
-        try {
-            context.registerReceiver(
-                object : android.content.BroadcastReceiver() {
-                    override fun onReceive(ctx: Context?, intent: Intent?) {
-                        val parsed = intent?.let(GestureBubbleIpcProtocol::readAck) ?: return
-                        val (id, outcome, diagnostic) = parsed
-                        logger(
-                            Log.INFO,
-                            "GESTURE_IPC_ACK id=$id outcome=${outcome.name} diag=$diagnostic",
-                            null,
-                        )
-                        pending.remove(id)?.offer(outcome)
+    /**
+     * 注册回执接收器。
+     *
+     * 审查意见 P1：旧实现先置 `true` 再注册，注册失败后永不重试，所有请求都会超时。
+     * 现在只在**注册成功后**才置位；失败时记录诊断码，下次调用会重新尝试。
+     */
+    private fun ensureReceiver(): Boolean {
+        if (receiverRegistered) return true
+        synchronized(this) {
+            if (receiverRegistered) return true
+            return try {
+                context.registerReceiver(
+                    object : BroadcastReceiver() {
+                        override fun onReceive(ctx: Context?, intent: Intent?) {
+                            val parsed = intent?.let(GestureBubbleIpcProtocol::readAck) ?: return
+                            val (id, outcome, diagnostic) = parsed
+                            logger(
+                                Log.INFO,
+                                "GESTURE_IPC_ACK id=$id outcome=${outcome.name} diag=$diagnostic",
+                                null,
+                            )
+                            pending.remove(id)?.deliver(outcome)
+                        }
+                    },
+                    IntentFilter(GestureBubbleIpcProtocol.ACTION_COMMIT_ACK),
+                )
+                receiverRegistered = true
+                logger(Log.INFO, "GESTURE_IPC_ACK_RECEIVER_READY", null)
+                true
+            } catch (t: Throwable) {
+                logger(Log.WARN, "GESTURE_IPC_ACK_RECEIVER_FAILED ${t.javaClass.simpleName}: ${t.message}", t)
+                false
+            }
+        }
+    }
+
+    /** [AppLaunchCommitter] 实现：只发不等。 */
+    override fun commit(component: ComponentName): Boolean {
+        val id = newRequestId(component)
+        return send(component, 0, id)
+    }
+
+    /**
+     * 异步提交。
+     *
+     * @param onResult 结果回调（可能在后台线程）；超时会以 [GestureBubbleIpcProtocol.Outcome.Unknown] 回调。
+     * @return 句柄，可调用 [Handle.cancel] 放弃等待（不影响已发出的请求）。
+     */
+    fun submit(
+        component: ComponentName,
+        userId: Int = 0,
+        onResult: (GestureBubbleIpcProtocol.Outcome) -> Unit,
+    ): Handle {
+        val requestId = newRequestId(component)
+
+        if (!ensureReceiver()) {
+            // 收不到回执，直接判未知，并明确告知调用方（不回退、不重试）
+            logger(Log.WARN, "GESTURE_IPC_NO_ACK_CHANNEL id=$requestId", null)
+            onResult(GestureBubbleIpcProtocol.Outcome.Unknown)
+            return Handle(requestId)
+        }
+
+        val entry = Pending(onResult)
+        pending[requestId] = entry
+        // 超时任务：独立调度线程，绝不阻塞调用线程
+        entry.timeout =
+            scheduler.schedule(
+                {
+                    val timedOut = pending.remove(requestId)
+                    if (timedOut != null) {
+                        logger(Log.WARN, "GESTURE_IPC_TIMEOUT id=$requestId", null)
+                        timedOut.deliver(GestureBubbleIpcProtocol.Outcome.Unknown)
                     }
                 },
-                android.content.IntentFilter(GestureBubbleIpcProtocol.ACTION_COMMIT_ACK),
+                timeoutMillis,
+                TimeUnit.MILLISECONDS,
             )
-        } catch (t: Throwable) {
-            logger(Log.WARN, "GESTURE_IPC_ACK_RECEIVER_FAILED ${t.javaClass.simpleName}", t)
+
+        if (!send(component, userId, requestId)) {
+            pending.remove(requestId)?.let { failed ->
+                failed.timeout?.cancel(false)
+                failed.deliver(GestureBubbleIpcProtocol.Outcome.Unknown)
+            }
         }
+        return Handle(requestId)
     }
 
-    /**
-     * 提交一次气泡启动，等待 SystemUI 回执。
-     *
-     * @return false 仅代表 [Outcome.Rejected]（可回退）；超时/通道不可用时返回 false
-     *         但会打出 `GESTURE_IPC_UNKNOWN` 诊断码——调用方需按该码区分是否回退。
-     */
-    override fun commit(component: ComponentName): Boolean =
-        submit(component) == GestureBubbleIpcProtocol.Outcome.Accepted
-
-    /** 三分结果版本，供协调器决定是否回退。 */
-    fun submit(component: ComponentName, userId: Int = 0): GestureBubbleIpcProtocol.Outcome {
-        ensureReceiver()
-        val requestId = "${System.currentTimeMillis()}-${component.hashCode()}"
-        val queue = java.util.concurrent.ArrayBlockingQueue<GestureBubbleIpcProtocol.Outcome>(1)
-        pending[requestId] = queue
-        return try {
-            send(component, userId, requestId)
-            val outcome = queue.poll(timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS)
-            if (outcome == null) {
-                logger(Log.WARN, "GESTURE_IPC_TIMEOUT id=$requestId", null)
-                GestureBubbleIpcProtocol.Outcome.Unknown
-            } else {
-                outcome
-            }
+    private fun send(component: ComponentName, userId: Int, requestId: String): Boolean =
+        try {
+            val intent =
+                GestureBubbleIpcProtocol.buildRequestIntent(
+                    component = component,
+                    userId = userId,
+                    requestId = requestId,
+                    source = "radial-gesture",
+                )
+            intent.setPackage(GestureBubbleIpcProtocol.SYSTEM_UI_PACKAGE)
+            context.sendBroadcast(intent)
+            logger(Log.INFO, "GESTURE_IPC_SENT id=$requestId target=${component.flattenToShortString()}", null)
+            true
         } catch (t: Throwable) {
             logger(Log.WARN, "GESTURE_IPC_SEND_FAILED ${t.javaClass.simpleName}", t)
-            GestureBubbleIpcProtocol.Outcome.Unknown
-        } finally {
-            pending.remove(requestId)
+            false
+        }
+
+    private fun newRequestId(component: ComponentName): String =
+        "${System.currentTimeMillis()}-${component.hashCode()}"
+
+    /** 等待中的请求。 */
+    private class Pending(private val callback: (GestureBubbleIpcProtocol.Outcome) -> Unit) {
+        var timeout: ScheduledFuture<*>? = null
+        private var delivered = false
+
+        @Synchronized
+        fun deliver(outcome: GestureBubbleIpcProtocol.Outcome) {
+            if (delivered) return
+            delivered = true
+            timeout?.cancel(false)
+            runCatching { callback(outcome) }
         }
     }
 
-    /**
-     * 发送请求。system_server 发出的广播不受厂商后台启动管控，可以直接送达 SystemUI。
-     */
-    private fun send(component: ComponentName, userId: Int, requestId: String) {
-        val intent =
-            GestureBubbleIpcProtocol.buildRequestIntent(
-                component = component,
-                userId = userId,
-                requestId = requestId,
-                source = "radial-gesture",
-            )
-        intent.setPackage(SYSTEM_UI_PACKAGE)
-        // 不使用 FLAG_RECEIVER_FROM_SHELL：它是隐藏常量，且 system_server 本身即受信任发送方。
-        context.sendBroadcast(intent)
-        logger(Log.INFO, "GESTURE_IPC_SENT id=$requestId target=${component.flattenToShortString()}", null)
+    /** 请求句柄。 */
+    inner class Handle(val requestId: String) {
+        /** 放弃本地等待（已发出的请求不受影响）。 */
+        fun cancel() {
+            pending.remove(requestId)?.timeout?.cancel(false)
+        }
     }
 
     private companion object {
-        const val SYSTEM_UI_PACKAGE = "com.android.systemui"
         const val DEFAULT_TIMEOUT_MILLIS = 3_000L
     }
 }

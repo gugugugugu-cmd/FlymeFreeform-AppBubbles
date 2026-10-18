@@ -501,7 +501,8 @@ internal class ColorOsFreeformCoordinator(
             return
         }
         when (val result = launchWithCommitter(entry.component)) {
-            FreeformLaunchResult.Started -> publishRecentFreeform(entry.component)
+            // Started 时最近小窗由 IPC/同步路径各自 publish，这里不重复
+            FreeformLaunchResult.Started -> Unit
             FreeformLaunchResult.TargetUnavailable ->
                 logger(Log.WARN, "FREEFORM_LAUNCH_TARGET_UNAVAILABLE", null)
             is FreeformLaunchResult.Failed ->
@@ -510,50 +511,77 @@ internal class ColorOsFreeformCoordinator(
     }
 
     /**
-     * 平台无关提交（审查意见 P1：统一回退语义）。
+     * 平台无关提交（审查意见 P1：统一回退语义；P0：不阻塞 system_server 主线程）。
+     *
+     * 本方法在 **system_server 主线程**执行（`onAppCommitted` → `handler.post`），
+     * 因此**绝不能**同步等待回执。改为异步：
+     *  - 请求发出后立即返回 `Submitted`，真正的结果由回调处理；
+     *  - 回调里再按三态决定是否回退（切回 handler 线程执行 UI 相关动作）。
      *
      * 三条互斥规则：
-     *  - **受理**：请求已交给 SystemUI 的 BubbleController → 记 started，不再重复启动；
+     *  - **受理**：已交给 SystemUI 的 BubbleController → 不再重复启动，也不回退；
      *  - **明确拒绝**：可安全回退 → 走 ColorOS 原生自由窗启动；
-     *  - **结果未知**（超时 / 通道不可用 / 后端崩溃）：**不回退也不重试**，
-     *    以免同一次手势开出两个窗口；只记诊断码等待人工判断。
-     *
-     * 注意「受理」不等于「气泡已显示」——后者属于实机观察项，
-     * 不能在这里用一个 true 就当成已经弹出。
+     *  - **结果未知**（超时 / 通道不可用）：**不回退也不重试**，只记诊断码。
      */
     private fun launchWithCommitter(component: ComponentName): FreeformLaunchResult {
         val injected = committer
         if (injected == null) return launcher.launch(component)
-        val outcome =
-            try {
-                when (injected) {
-                    is GestureBubbleIpcClient -> injected.submit(component)
-                    // 测试替身：Bool 语义按「受理 / 拒绝」二分
-                    else -> if (injected.commit(component)) {
-                        GestureBubbleIpcProtocol.Outcome.Accepted
-                    } else {
-                        GestureBubbleIpcProtocol.Outcome.Rejected
-                    }
-                }
+        if (injected is GestureBubbleIpcClient) {
+            return try {
+                injected.submit(component) { outcome -> onCommitOutcome(component, outcome) }
+                // 已发出即为「请求已提交」，真实结果异步到达；不代表气泡已显示
+                FreeformLaunchResult.Started
             } catch (t: Throwable) {
-                logger(Log.WARN, "COMMITTER_CRASHED ${t.message}", t)
-                GestureBubbleIpcProtocol.Outcome.Unknown
+                logger(Log.WARN, "COMMITTER_CRASHED ${t.javaClass.simpleName}", t)
+                committerUnknown(component)
             }
-        return when (outcome) {
-            GestureBubbleIpcProtocol.Outcome.Accepted -> FreeformLaunchResult.Started
-            GestureBubbleIpcProtocol.Outcome.Rejected -> {
-                logger(Log.INFO, "COMMITTER_REJECTED_FALLBACK ${component.flattenToShortString()}", null)
-                launcher.launch(component)
+        }
+        // 测试替身：Bool 语义按「受理 / 拒绝」二分
+        val accepted =
+            try {
+                injected.commit(component)
+            } catch (t: Throwable) {
+                logger(Log.WARN, "COMMITTER_CRASHED ${t.javaClass.simpleName}", t)
+                return committerUnknown(component)
             }
-            GestureBubbleIpcProtocol.Outcome.Unknown -> {
-                // 明确标记"未知"，调用方不得据此重试（launchCommittedApp 只记日志）
-                FreeformLaunchResult.Failed(
-                    "COMMITTER_RESULT_UNKNOWN",
-                    CommitterUnknownException(component.flattenToString()),
-                )
+        return if (accepted) {
+            FreeformLaunchResult.Started
+        } else {
+            logger(Log.INFO, "COMMITTER_REJECTED_FALLBACK ${component.flattenToShortString()}", null)
+            launcher.launch(component)
+        }
+    }
+
+    /** IPC 回调（后台线程）：切回 handler 线程处理回退与记录。 */
+    private fun onCommitOutcome(
+        component: ComponentName,
+        outcome: GestureBubbleIpcProtocol.Outcome,
+    ) {
+        handler.post {
+            when (outcome) {
+                GestureBubbleIpcProtocol.Outcome.Accepted -> {
+                    logger(Log.INFO, "COMMIT_ACCEPTED ${component.flattenToShortString()}", null)
+                    publishRecentFreeform(component)
+                }
+                GestureBubbleIpcProtocol.Outcome.Rejected -> {
+                    // 明确拒绝且可安全回退
+                    logger(Log.INFO, "COMMITTER_REJECTED_FALLBACK ${component.flattenToShortString()}", null)
+                    val fallback = launcher.launch(component)
+                    if (fallback == FreeformLaunchResult.Started) publishRecentFreeform(component)
+                }
+                GestureBubbleIpcProtocol.Outcome.Unknown -> {
+                    // 不回退、不重试：避免同一次手势开出两个窗口
+                    logger(Log.WARN, "COMMITTER_RESULT_UNKNOWN ${component.flattenToShortString()}", null)
+                }
             }
         }
     }
+
+    private fun committerUnknown(component: ComponentName): FreeformLaunchResult =
+        FreeformLaunchResult.Failed(
+            "COMMITTER_RESULT_UNKNOWN",
+            CommitterUnknownException(component.flattenToString()),
+        )
 
     /** committer 结果未知时的哨兵异常（Failed.cause 为非空 Throwable）。 */
     private class CommitterUnknownException(component: String) :

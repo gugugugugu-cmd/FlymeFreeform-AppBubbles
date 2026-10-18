@@ -53,6 +53,19 @@ internal class GestureBubbleIpcReceiver(
                 ) {
                     return
                 }
+                // 审查意见 P1：setPackage 只限目标包，不能证明来源可信。
+                // 读取发送方 uid，只接受 system_server(1000) / root(0)。
+                // getSendingUid() 是 API 34+ 方法，反射调用以便低版本降级为不可信。
+                val senderUid = sendingUidOrUnknown(this)
+                if (!isTrustedSender(senderUid)) {
+                    log(Log.WARN, "GESTURE_IPC_REJECTED senderUid=$senderUid action=$action")
+                    intent.getStringExtra(GestureBubbleIpcProtocol.EXTRA_REQUEST_ID)?.let {
+                        GestureBubbleIpcProtocol.sendAck(
+                            context, it, GestureBubbleIpcProtocol.Outcome.Rejected, "untrusted-sender",
+                        )
+                    }
+                    return
+                }
                 val component = GestureBubbleIpcProtocol.parseComponent(intent)
                 val requestId = intent.getStringExtra(GestureBubbleIpcProtocol.EXTRA_REQUEST_ID)
                 if (component == null || requestId == null) {
@@ -75,6 +88,17 @@ internal class GestureBubbleIpcReceiver(
                 executor.execute { run(requestId, component, userId, source) }
             }
         }
+
+    private fun sendingUidOrUnknown(receiver: BroadcastReceiver): Int =
+        try {
+            BroadcastReceiver::class.java.getMethod("getSendingUid").invoke(receiver) as Int
+        } catch (_: Throwable) {
+            // 低版本没有该 API：无法验证来源 → 按不可信处理
+            -1
+        }
+
+    /** system_server(1000) 与 root(0) 可信；其余（含未知 -1）一律拒绝。 */
+    private fun isTrustedSender(uid: Int): Boolean = uid == android.os.Process.SYSTEM_UID || uid == 0
 
     private fun run(
         requestId: String,
