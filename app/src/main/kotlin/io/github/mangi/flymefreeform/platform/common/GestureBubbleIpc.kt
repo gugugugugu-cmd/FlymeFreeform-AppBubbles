@@ -182,9 +182,19 @@ internal class GestureBubbleIpcClient(
         synchronized(this) {
             if (receiverRegistered) return true
             return try {
-                context.registerReceiver(
+                val ackReceiver =
                     object : BroadcastReceiver() {
                         override fun onReceive(ctx: Context?, intent: Intent?) {
+                            // 回执同样要验来源：否则任意应用伪造 Accepted 即可欺骗协调器
+                            val senderUid = sentFromUidOrUnknown(this)
+                            if (!isTrustedAckSender(this, senderUid)) {
+                                logger(
+                                    Log.WARN,
+                                    "GESTURE_IPC_ACK_REJECTED senderUid=$senderUid",
+                                    null,
+                                )
+                                return
+                            }
                             val parsed = intent?.let(GestureBubbleIpcProtocol::readAck) ?: return
                             val (id, outcome, diagnostic) = parsed
                             logger(
@@ -194,9 +204,20 @@ internal class GestureBubbleIpcClient(
                             )
                             pending.remove(id)?.deliver(outcome)
                         }
-                    },
-                    IntentFilter(GestureBubbleIpcProtocol.ACTION_COMMIT_ACK),
-                )
+                    }
+                val filter = IntentFilter(GestureBubbleIpcProtocol.ACTION_COMMIT_ACK)
+                // 审查意见：自定义广播接收器必须显式声明导出状态（API 34+），
+                // 否则注册抛 SecurityException → submit() 直接判 Unknown，链路全断。
+                // 必须导出：回执来自 SystemUI（不同 UID）。
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    context.registerReceiver(
+                        ackReceiver,
+                        filter,
+                        Context.RECEIVER_EXPORTED,
+                    )
+                } else {
+                    context.registerReceiver(ackReceiver, filter)
+                }
                 receiverRegistered = true
                 logger(Log.INFO, "GESTURE_IPC_ACK_RECEIVER_READY", null)
                 true
@@ -205,6 +226,31 @@ internal class GestureBubbleIpcClient(
                 false
             }
         }
+    }
+
+    /** 读取广播发送方 uid；API 34+ 方法名经 android.jar javap 核对为 getSentFromUid()。 */
+    private fun sentFromUidOrUnknown(receiver: BroadcastReceiver): Int =
+        try {
+            BroadcastReceiver::class.java.getMethod("getSentFromUid").invoke(receiver) as Int
+        } catch (_: Throwable) {
+            -1
+        }
+
+    /**
+     * 回执发送方可信性：只接受 SystemUI 与 root。
+     *
+     * SystemUI 的 uid 是 1000(system)；其包名由 getSentFromPackage() 提供。
+     * 取不到 uid（-1）一律拒绝。
+     */
+    private fun isTrustedAckSender(receiver: BroadcastReceiver, uid: Int): Boolean {
+        if (uid != android.os.Process.SYSTEM_UID && uid != 0) return false
+        val pkg =
+            try {
+                BroadcastReceiver::class.java.getMethod("getSentFromPackage").invoke(receiver) as? String
+            } catch (_: Throwable) {
+                null
+            }
+        return pkg == null || pkg == "com.android.systemui" || pkg == GestureBubbleIpcProtocol.SYSTEM_SERVER_PACKAGE
     }
 
     /** [AppLaunchCommitter] 实现：只发不等。 */
