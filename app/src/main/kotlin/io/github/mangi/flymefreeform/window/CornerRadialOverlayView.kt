@@ -139,6 +139,10 @@ internal class CornerRadialOverlayView(
 
     /** @author bomo 圆心离屏幕底边的上移量（px），由热区基准线高度换算，见 updateLayout。 */
     private var radialBottomOffsetPx = 0f
+
+    /** @author bomo 轮盘出现时刻，用于诊断「多久之后被关掉」。 */
+    private var shownAtUptime = 0L
+
     private var selectedIndex: Int? = null
     private var dismissing = false
     private var dismissNotified = false
