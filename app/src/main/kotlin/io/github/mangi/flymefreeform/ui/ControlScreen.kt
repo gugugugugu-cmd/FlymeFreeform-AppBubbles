@@ -528,7 +528,7 @@ private fun SettingsCard(
         }
         // [MINIS] 触发热区基准线高度：不改形状/半径，只把整块热区连同菜单圆心沿侧边抬高。
         RemoteDpSliderPreference(
-            icon = Icons.Rounded.Height,
+            icon = Icons.Rounded.SwapVert,
             confirmedValue = state.settings.triggerBottomOffsetDp,
             isUpdating = state.isUpdating,
             enabled = state.canChangeSettings,
