@@ -1,11 +1,11 @@
-name: Probe (instrumentation class dump)
+name: Probe
 on: [workflow_dispatch, push]
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install SDK
+      - name: Install apktool deps
         run: |
           SDK_ROOT="${ANDROID_HOME:-$HOME/android-sdk}"
           if [ ! -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
@@ -14,21 +14,27 @@ jobs:
           fi
           "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" "platforms;android-35" "build-tools;35.0.0"
           echo "SDK_ROOT=$SDK_ROOT" >> $GITHUB_ENV
+          curl -sSL -o /usr/local/bin/apktool.jar https://github.com/iBotPeaches/Apktool/releases/download/v2.10.0/apktool_2.10.0.jar
       - name: Build probe apk
         run: |
           set -ex
           BT="$SDK_ROOT/build-tools/35.0.0"
           JAR="$SDK_ROOT/platforms/android-35/android.jar"
-          rm -rf out && mkdir -p out/classes out/dex out/assets
+          rm -rf out && mkdir -p out/classes
           javac -nowarn -source 11 -target 11 -d out/classes -cp "$JAR" probe/Probe.java
-          "$BT/d8" --min-api 29 --lib "$JAR" --output out/dex $(find out/classes -name '*.class')
-          "$BT/aapt2" link -o out/base.apk -I "$JAR" --manifest probe/AndroidManifest.xml -A out/assets
-          mkdir -p apkroot && cd apkroot && unzip -o -q ../out/base.apk && cp ../out/dex/classes.dex . && zip -q -r ../out/final.apk . && cd ..
-          cp out/final.apk out/base.apk
-          unzip -l out/base.apk
+          "$BT/d8" --min-api 29 --lib "$JAR" --output out $(find out/classes -name '*.class')
+          cp probe/probe.prop out/apktool.yml
+          sed -i 's/apkFileName.*/apkFileName: probe.apk/' out/apktool.yml
+          echo "version: 2.10.0" >> out/apktool.yml
+          echo "{sdkInfo: versionInfo: {minSdkVersion: '29', targetSdkVersion: '35'}, packageInfo: forcedPackageId: '127'}" >> out/apktool.yml
+          cp probe/AndroidManifest.xml out/AndroidManifest.xml
+          mkdir -p out/assets && cp probe/assets/* out/assets/ 2>/dev/null || true
+          echo '<?xml version="1.0" encoding="utf-8"?>' > out/res/values/strings.xml 2>/dev/null || (mkdir -p out/res/values && echo '<?xml version="1.0" encoding="utf-8"?>' > out/res/values/strings.xml)
+          echo '<resources><string name="app_name">Flyme Probe</string></resources>' >> out/res/values/strings.xml
+          java -jar /usr/local/bin/apktool.jar b out -o out/probe-unsigned.apk
+          unzip -l out/probe-unsigned.apk
           keytool -genkeypair -keystore /tmp/k.jks -storepass android -keypass android -alias k -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=probe"
-          "$BT/zipalign" -f 4 out/base.apk out/aligned.apk
-          "$BT/apksigner" sign --ks /tmp/k.jks --ks-pass pass:android --key-pass pass:android --out out/probe-signed.apk out/aligned.apk
-          "$BT/apksigner" verify out/probe-signed.apk && ls -l out
+          "$BT/apksigner" sign --ks /tmp/k.jks --ks-pass pass:android --key-pass pass:android --out out/probe-signed.apk out/probe-unsigned.apk
+          "$BT/apksigner" verify out/probe-signed.apk
       - uses: actions/upload-artifact@v4
         with: { name: probe-apk, path: out/probe-signed.apk }
