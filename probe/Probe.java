@@ -23,8 +23,8 @@ public class Probe extends Instrumentation {
 
     @Override public void onStart() {
         try {
-            Bundle args = getArguments();
-            String pkg = args == null ? null : args.getString("package");
+            String pkg = System.getProperty("flyme.probe.pkg");
+            if (pkg == null) pkg = System.getenv("FLYME_PROBE_PKG");
             if (pkg == null) {
                 ApplicationInfo ai = getContext().getApplicationInfo();
                 pkg = ai == null ? "?" : ai.packageName;
