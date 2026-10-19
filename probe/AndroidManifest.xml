@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="io.github.mangi.flymefreeformprobe">
+    package="io.github.mangi.flymefreeformprobe"
+    android:versionCode="1"
+    android:versionName="1.0">
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
-    <application android:label="Flyme Probe" />
+    <application android:label="Flyme Probe" android:hasCode="true">
+        <meta-data android:name="xposedmodule" android:value="true" />
+        <meta-data android:name="xposeddescription" android:value="临时诊断模块：只读取桌面/SystemUI 的类与方法签名" />
+        <meta-data android:name="xposedminversion" android:value="93" />
+    </application>
 </manifest>
