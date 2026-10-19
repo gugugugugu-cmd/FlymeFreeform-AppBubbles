@@ -88,10 +88,8 @@ internal object RadialIconGeometry {
             radius = BASE_RADIUS_DP * unit,
             plateDiameter = diameter,
             iconDiameter = diameter,
-            // 相邻图标圆心距约 49dp，而图标直径 47.5dp；进入半径必须覆盖到圆心距的一半以上，
-            // 否则手指划过两个图标正中间时会落进「无选中」的空档，松手即被当成取消。
-            selectionEnterRadius = diameter * 1.15f,
-            selectionKeepRadius = diameter * 1.45f,
+            selectionEnterRadius = diameter * 0.9f,
+            selectionKeepRadius = diameter * 1.25f,
             itemPadding = BASE_ITEM_PADDING_DP * unit,
             pixelsPerBaseDp = unit,
             innerRadius = innerRadius,
