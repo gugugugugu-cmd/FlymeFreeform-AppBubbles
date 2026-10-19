@@ -88,8 +88,7 @@ class ModuleMain : XposedModule() {
                 installIndependently("SYSTEMUI_BUBBLE") { installBubbleSystemUiHooks(this, param.classLoader, settings) }
             }
 
-            processName == PROCESS_LAUNCHER && param.packageName == PROCESS_LAUNCHER ||
-                processName == PROCESS_LAUNCHER_PIXEL && param.packageName == PROCESS_LAUNCHER_PIXEL -> {
+            isLauncherPackage(param.packageName) -> {
                 hooksInstalled = true
                 installIndependently("LAUNCHER") { LauncherHookInstaller(this, settings).install(param.classLoader) }
                 installIndependently("LAUNCHER_BUBBLE") { installBubbleLauncherHooks(this, param.classLoader, settings) }
@@ -105,10 +104,13 @@ class ModuleMain : XposedModule() {
     private fun isExpectedProcess(param: XposedModuleInterface.ModuleLoadedParam): Boolean =
         param.isSystemServer ||
             param.processName == PROCESS_SYSTEM_UI ||
-            param.processName == PROCESS_LAUNCHER ||
-            param.processName == PROCESS_LAUNCHER_PIXEL ||
+            isLauncherPackage(param.processName) ||
             param.processName == ColorOsSidebarTarget.NATIVE_PROCESS_NAME ||
             param.processName == ColorOsSidebarTarget.PROCESS_NAME
+
+    /** 桌面包名随 ROM 而异（Pixel 用 nexuslauncher，AOSP/ColorOS 用 launcher3），按后缀识别避免漏判。 */
+    private fun isLauncherPackage(name: String?): Boolean =
+        name != null && LAUNCHER_PACKAGE_SUFFIXES.any { name == it || name.startsWith("$it:") }
 
     /**
      * 独立安装一组 hook：任何一组抛异常都不影响其余组。
@@ -137,5 +139,11 @@ class ModuleMain : XposedModule() {
 
         /** Pixel Launcher（AOSP 派生 ROM 的默认桌面进程）。 */
         const val PROCESS_LAUNCHER_PIXEL = "com.google.android.apps.nexuslauncher"
+
+        val LAUNCHER_PACKAGE_SUFFIXES = listOf(
+            PROCESS_LAUNCHER_PIXEL,
+            PROCESS_LAUNCHER,
+            "com.android.launcher3",
+        )
     }
 }
