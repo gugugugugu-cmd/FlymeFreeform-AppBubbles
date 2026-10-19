@@ -23,7 +23,8 @@ jobs:
           javac -nowarn -source 11 -target 11 -d out/classes -cp "$JAR" probe/Probe.java
           "$BT/d8" --min-api 29 --lib "$JAR" --output out/dex $(find out/classes -name '*.class')
           "$BT/aapt2" link -o out/base.apk -I "$JAR" --manifest probe/AndroidManifest.xml -A out/assets
-          (cd out/dex && zip -q ../base.apk classes.dex)
+          mkdir -p apkroot && cd apkroot && unzip -o -q ../out/base.apk && cp ../out/dex/classes.dex . && zip -q -r ../out/final.apk . && cd ..
+          cp out/final.apk out/base.apk
           unzip -l out/base.apk
           keytool -genkeypair -keystore /tmp/k.jks -storepass android -keypass android -alias k -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=probe"
           "$BT/zipalign" -f 4 out/base.apk out/aligned.apk
