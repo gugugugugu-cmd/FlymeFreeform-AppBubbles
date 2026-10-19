@@ -30,7 +30,7 @@ zip -q -0 -X ../final.apk AndroidManifest.xml
 zip -q -X ../final.apk classes.dex
 (cd META-INF && zip -q -X ../../final.apk xposed/module.prop xposed/java_init.list xposed/scope.list)
 cd ..
-unzip -v final.apk
+unzip -v ../final.apk && cp ../final.apk ../out/base.apk
 
 # 5) 对齐 + 签名
 "$BT/zipalign" -f -p 4 out/final.apk out/aligned.apk
