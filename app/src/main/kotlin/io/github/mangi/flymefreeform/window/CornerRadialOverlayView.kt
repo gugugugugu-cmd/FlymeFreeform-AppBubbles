@@ -225,10 +225,43 @@ internal class CornerRadialOverlayView(
     fun finishGesture() {
         val selection = selectedIndex
         val target = selection?.let(::slotTarget)
+        moduleLog(
+            "RADIAL_COMMIT selection=$selection target=$target " +
+                "x=${latestX.toInt()} y=${latestY.toInt()}",
+        )
         when {
+            // 松手位置离圆心足够远说明用户已经伸进菜单区，只是恰好压在图标间隙上；
+            // 这种情形按最近图标提交，而不是整轮收起。
+            selection == null && isInsideMenuRegion() -> {
+                val fallback = nearestSlot()
+                val fallbackTarget = fallback?.let(::slotTarget)
+                moduleLog("RADIAL_COMMIT_FALLBACK slot=$fallback target=$fallbackTarget")
+                when {
+                    fallback == null -> dismissAnimated()
+                    fallbackTarget == null -> showMorePanel()
+                    else -> dismissAnimated(catalog.radialApps[fallbackTarget])
+                }
+            }
             selection == null -> dismissAnimated()
             target == null -> showMorePanel()
             else -> dismissAnimated(catalog.radialApps[target])
+        }
+    }
+
+    private fun isInsideMenuRegion(): Boolean {
+        val layout = layoutState.value
+        if (layout.radius <= 0f) return false
+        val inward = if (layout.side == CornerSide.Left) latestX - layout.origin.x else layout.origin.x - latestX
+        return inward >= layout.radius * MENU_REGION_START_RATIO
+    }
+
+    private fun nearestSlot(): Int? {
+        val layout = layoutState.value
+        return layout.itemCenters.indices.minByOrNull { index ->
+            val center = layout.itemCenters[index]
+            val dx = latestX - center.x
+            val dy = latestY - center.y
+            dx * dx + dy * dy
         }
     }
 
@@ -1118,6 +1151,9 @@ internal class CornerRadialOverlayView(
         const val GESTURE_TIMEOUT_MS = 5_000L
         const val PANEL_TIMEOUT_MS = 15_000L
         const val DISMISS_FALLBACK_GRACE_MS = 260L
+
+        /** 松手时「已伸进菜单区」的判定：内切向位移超过外圈半径的这个比例。 */
+        const val MENU_REGION_START_RATIO = 0.45f
     }
 }
 

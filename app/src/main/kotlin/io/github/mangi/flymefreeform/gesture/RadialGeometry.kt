@@ -95,20 +95,22 @@ internal object RadialGeometry {
         keepRadius: Float,
     ): Int? {
         if (layout.radius <= 0f) return null
+        val nearest =
+            layout.itemCenters
+                .indices
+                .minByOrNull { index ->
+                    val center = layout.itemCenters[index]
+                    hypot(x - center.x, y - center.y)
+                } ?: return null
+        val nearestDistance = hypot(x - layout.itemCenters[nearest].x, y - layout.itemCenters[nearest].y)
         if (previous != null && previous in layout.itemCenters.indices) {
             val center = layout.itemCenters[previous]
-            if (hypot(x - center.x, y - center.y) <= keepRadius) return previous
+            val previousDistance = hypot(x - center.x, y - center.y)
+            // 滞回：留在原图标上，或仍离原图标最近且没有离开可接受范围（防止穿过图标间隙时抖动丢失）。
+            if (previousDistance <= keepRadius) return previous
+            if (previous == nearest && previousDistance <= enterRadius) return previous
         }
-        return layout.itemCenters
-            .indices
-            .minByOrNull { index ->
-                val center = layout.itemCenters[index]
-                hypot(x - center.x, y - center.y)
-            }
-            ?.takeIf { index ->
-                val center = layout.itemCenters[index]
-                hypot(x - center.x, y - center.y) <= enterRadius
-            }
+        return nearest.takeIf { nearestDistance <= enterRadius }
     }
 
     fun polarAngle(layout: RadialLayout, point: GesturePoint): Float =
