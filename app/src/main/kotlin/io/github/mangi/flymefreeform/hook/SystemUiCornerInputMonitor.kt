@@ -283,6 +283,7 @@ internal class SystemUiCornerInputMonitor(
         private var streamStartUptime = 0L
         private var lastEventUptime = 0L
         private var pilferAccepted = false
+        private var streamEnded = false
 
         val streamActive: Boolean
             get() = tracking
@@ -305,6 +306,7 @@ internal class SystemUiCornerInputMonitor(
                     resetTracking()
                     streamStartUptime = event.eventTime
                     lastEventUptime = event.eventTime
+                    streamEnded = false
                     val eligible =
                         event.pointerCount == 1 &&
                             event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER &&
@@ -377,9 +379,17 @@ internal class SystemUiCornerInputMonitor(
                 MotionEvent.ACTION_UP,
                 MotionEvent.ACTION_CANCEL -> {
                     val claimedBefore = gestureEngine.isClaimed
+                    streamEnded = true
                     if (event.actionMasked == MotionEvent.ACTION_UP && tracking) {
                         gestureEngine.up(event.getPointerId(event.actionIndex))
                     }
+                    val howUp = event.actionMasked == MotionEvent.ACTION_UP
+                    trace(
+                        "RADIAL_GESTURE_SUMMARY how=" + (if (howUp) "up" else "cancel") +
+                            " pilfer=$pilferAccepted claimed=$claimedBefore" +
+                            " dur=${event.eventTime - streamStartUptime}ms" +
+                            " | 抬起=用户松手 / cancel=被桌面或系统抢走",
+                    )
                     trace(
                         "RADIAL_STREAM_END how=" +
                             (if (event.actionMasked == MotionEvent.ACTION_UP) "up" else "cancel") +

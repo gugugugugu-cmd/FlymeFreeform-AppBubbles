@@ -242,7 +242,8 @@ internal class CornerRadialOverlayView(
         // 与「用户抬手且未选中」的 dismissAnimated 区分开。
         moduleLog(
             "RADIAL_GESTURE_CANCELLED selected=$selectedIndex " +
-                "x=${latestX.toInt()} y=${latestY.toInt()}",
+                "x=${latestX.toInt()} y=${latestY.toInt()}" +
+                " | 被上游取消：桌面/系统手势抢走了触摸流",
         )
         dismissAnimated()
     }
@@ -987,7 +988,8 @@ internal class CornerRadialOverlayView(
                 if (!disposed && !dismissNotified) {
                     removeCallbacks(timeout)
                     dismissNotified = true
-                    Log.i("FlymeFreeformTool", "TOOL_RADIAL_HIDDEN ms=${SystemClock.uptimeMillis() - selectedAt}")
+                    // 走模块 logger，别再写 android.util.Log：那条只能靠 logcat 抓，LSPosed 面板里看不到。
+                    moduleLog("TOOL_RADIAL_HIDDEN ms=${SystemClock.uptimeMillis() - selectedAt}")
                     listener.onAppCommitted(pendingCommit)
                 }
             }
