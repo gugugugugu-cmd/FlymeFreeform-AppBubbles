@@ -1,0 +1,10 @@
+version: 2.10.0
+apkFileName: empty.apk
+isFrameworkApk: false
+sdkInfo:
+  minSdkVersion: '29'
+  targetSdkVersion: '35'
+packageInfo:
+  forcedPackageId: '127'
+usesFramework:
+  ids: [1]
