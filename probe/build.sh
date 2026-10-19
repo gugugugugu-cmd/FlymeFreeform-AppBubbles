@@ -27,10 +27,11 @@ unzip -o -q "$OUT/base.apk"
 cp "$OUT/dex/classes.dex" .
 cp -r "$OUT/meta/." .
 rm -f "$OUT/final.apk"
-zip -q -0 -X "$OUT/final.apk" resources.arsc
-zip -q -0 -X "$OUT/final.apk" AndroidManifest.xml
-zip -q -X "$OUT/final.apk" classes.dex
-zip -q -X "$OUT/final.apk" META-INF/xposed/module.prop META-INF/xposed/java_init.list META-INF/xposed/scope.list
+# resources.arsc / AndroidManifest 必须不压缩；其它条目一次性写入，缺文件直接失败
+(cd "$OUT/apkroot" && ls -1 resources.arsc AndroidManifest.xml classes.dex > /tmp/list0.txt)
+(cd "$OUT/apkroot" && zip -q -0 -@ "$OUT/final.apk" < /tmp/list0.txt)
+(cd "$OUT/apkroot" && find META-INF/xposed -type f > /tmp/list1.txt && test -s /tmp/list1.txt)
+(cd "$OUT/apkroot" && zip -q -X -@ "$OUT/final.apk" < /tmp/list1.txt)
 cd "$OUT"
 unzip -v "$OUT/final.apk"
 
