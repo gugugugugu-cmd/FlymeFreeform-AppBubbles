@@ -25,9 +25,8 @@ jobs:
           javac -nowarn -source 11 -target 11 -d out/classes -cp "$SDK_ROOT/platforms/android-35/android.jar" probe/Probe.java
           "$BT/d8" --min-api 29 --lib "$SDK_ROOT/platforms/android-35/android.jar" --output out/dex $(find out/classes -name '*.class')
           "$BT/aapt2" link -o out/base.apk -I "$SDK_ROOT/platforms/android-35/android.jar" --manifest probe/AndroidManifest.xml -A out/assets
-          unzip -l out/base.apk
           cd out/dex && zip -q ../base.apk classes.dex && cd ..
-          cp probe/dex.json probe/java_probe.sh out/assets/
+          unzip -l out/base.apk
           keytool -genkeypair -keystore /tmp/k.jks -storepass android -keypass android -alias k -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=probe" >/dev/null 2>&1
           "$BT/zipalign" -f 4 base.apk aligned.apk
           "$BT/apksigner" sign --ks /tmp/k.jks --ks-pass pass:android --key-pass pass:android --out probe-signed.apk aligned.apk
