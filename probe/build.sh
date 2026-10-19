@@ -20,23 +20,25 @@ printf 'com.android.launcher\ncom.google.android.apps.nexuslauncher\ncom.android
     --min-sdk-version 29 --target-sdk-version 35 skel/res.zip
 
 # 4) 合入 dex 与元数据，resources.arsc / AndroidManifest 保持不压缩
-cd out && rm -rf apkroot && mkdir apkroot && cd apkroot
-unzip -o -q ../base.apk
-cp ../dex/classes.dex .
-cp -r ../meta/* .
-rm -f ../final.apk
-zip -q -0 -X ../final.apk resources.arsc
-zip -q -0 -X ../final.apk AndroidManifest.xml
-zip -q -X ../final.apk classes.dex
-(cd META-INF && zip -q -X ../../final.apk xposed/module.prop xposed/java_init.list xposed/scope.list)
-cd ..
-unzip -v ../final.apk && cp ../final.apk ../out/base.apk
+OUT="$PWD/out"
+rm -rf "$OUT/apkroot" && mkdir "$OUT/apkroot"
+cd "$OUT/apkroot"
+unzip -o -q "$OUT/base.apk"
+cp "$OUT/dex/classes.dex" .
+cp -r "$OUT/meta/." .
+rm -f "$OUT/final.apk"
+zip -q -0 -X "$OUT/final.apk" resources.arsc
+zip -q -0 -X "$OUT/final.apk" AndroidManifest.xml
+zip -q -X "$OUT/final.apk" classes.dex
+zip -q -X "$OUT/final.apk" META-INF/xposed/module.prop META-INF/xposed/java_init.list META-INF/xposed/scope.list
+cd "$OUT"
+unzip -v "$OUT/final.apk"
 
 # 5) 对齐 + 签名
-"$BT/zipalign" -f -p 4 out/final.apk out/aligned.apk
+"$BT/zipalign" -f -p 4 "$OUT/final.apk" "$OUT/aligned.apk"
 rm -f /tmp/k.jks
 keytool -genkeypair -keystore /tmp/k.jks -storepass android -keypass android -alias k \
     -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=probe"
 "$BT/apksigner" sign --min-sdk-version 29 --ks /tmp/k.jks --ks-pass pass:android \
-    --key-pass pass:android --out probe-signed.apk out/aligned.apk
-"$BT/apksigner" verify probe-signed.apk
+    --key-pass pass:android --out "$OUT/probe-signed.apk" "$OUT/aligned.apk"
+"$BT/apksigner" verify "$OUT/probe-signed.apk"
