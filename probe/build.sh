@@ -26,13 +26,12 @@ rm -rf "$OUT/apkroot" && mkdir -p "$OUT/apkroot/META-INF/xposed"
 cd "$OUT/apkroot"
 unzip -o -q "$OUT/base.apk"
 cp "$OUT/dex/classes.dex" .
-cp "$OUT/meta/META-INF/xposed/module.prop" .
+cp "$OUT/meta/META-INF/xposed/module.prop" META-INF/xposed/
 cp "$OUT/meta/META-INF/xposed/java_init.list" META-INF/xposed/
 cp "$OUT/meta/META-INF/xposed/scope.list" META-INF/xposed/
 rm -f "$OUT/final.apk"
 zip -q -0 -X "$OUT/final.apk" resources.arsc
-zip -q -X "$OUT/final.apk" AndroidManifest.xml classes.dex \
-    META-INF/xposed/module.prop META-INF/xposed/java_init.list META-INF/xposed/scope.list
+zip -q -X "$OUT/final.apk" AndroidManifest.xml classes.dex META-INF/xposed/module.prop META-INF/xposed/java_init.list META-INF/xposed/scope.list
 cd "$OUT"
 unzip -v "$OUT/final.apk"
 
