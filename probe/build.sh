@@ -5,9 +5,9 @@ JAR="$SDK_ROOT/platforms/android-35/android.jar"
 rm -rf out skel && mkdir -p out/classes skel
 cat > skel/AndroidManifest.xml <<'XML'
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.github.mangi.flymefreeformprobe">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="io.github.mangi.flymefreeformprobe"
+    android:versionCode="1" android:versionName="1.0">
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
-    <application android:hasCode="true" />
 </manifest>
 XML
 cat > skel/apktool.yml <<'YML'
