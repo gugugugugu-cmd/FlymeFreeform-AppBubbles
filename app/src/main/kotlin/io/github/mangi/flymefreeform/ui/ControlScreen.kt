@@ -217,6 +217,7 @@ internal fun ControlScreen(
                 rangeDp = preview.rangeDp,
                 horizontalDp = preview.horizontalDp,
                 verticalDp = preview.verticalDp,
+                bottomOffsetDp = preview.bottomOffsetDp,
                 leftEnabled = state.settings.leftCornerEnabled,
                 rightEnabled = state.settings.rightCornerEnabled,
             )
@@ -470,6 +471,7 @@ private fun SettingsCard(
                                 rangeDp = state.settings.cornerTriggerRangeDp,
                                 horizontalDp = it,
                                 verticalDp = state.settings.triggerVerticalDp,
+                                bottomOffsetDp = state.settings.triggerBottomOffsetDp,
                             )
                         },
                     )
@@ -494,6 +496,7 @@ private fun SettingsCard(
                                 rangeDp = state.settings.cornerTriggerRangeDp,
                                 horizontalDp = state.settings.triggerHorizontalDp,
                                 verticalDp = it,
+                                bottomOffsetDp = state.settings.triggerBottomOffsetDp,
                             )
                         },
                     )
@@ -519,6 +522,7 @@ private fun SettingsCard(
                                 rangeDp = it,
                                 horizontalDp = state.settings.triggerHorizontalDp,
                                 verticalDp = state.settings.triggerVerticalDp,
+                                bottomOffsetDp = state.settings.triggerBottomOffsetDp,
                             )
                         },
                     )
@@ -534,7 +538,19 @@ private fun SettingsCard(
             enabled = state.canChangeSettings,
             title = stringResource(R.string.trigger_bottom_offset_title),
             summary = stringResource(R.string.trigger_bottom_offset_summary),
-            onPreviewChange = { },
+            onPreviewChange = { dp ->
+                onCornerRangePreviewChange(
+                    dp?.let {
+                        TriggerRangePreview(
+                            shape = state.settings.triggerShape,
+                            rangeDp = state.settings.cornerTriggerRangeDp,
+                            horizontalDp = state.settings.triggerHorizontalDp,
+                            verticalDp = state.settings.triggerVerticalDp,
+                            bottomOffsetDp = it,
+                        )
+                    },
+                )
+            },
             onCommit = onTriggerBottomOffsetChange,
             coerce = { ModulePreferences.coerceTriggerBottomOffsetDp(it) },
             minDp = ModulePreferences.MIN_TRIGGER_BOTTOM_OFFSET_DP,
@@ -695,6 +711,7 @@ private data class TriggerRangePreview(
     val rangeDp: Int,
     val horizontalDp: Int,
     val verticalDp: Int,
+    val bottomOffsetDp: Int,
 )
 
 /**
@@ -708,6 +725,7 @@ private fun CornerRangePreview(
     rangeDp: Int,
     horizontalDp: Int,
     verticalDp: Int,
+    bottomOffsetDp: Int,
     leftEnabled: Boolean,
     rightEnabled: Boolean,
 ) {
@@ -717,10 +735,23 @@ private fun CornerRangePreview(
         val radius = rangeDp.dp.toPx()
         val horizontal = horizontalDp.dp.toPx()
         val vertical = verticalDp.dp.toPx()
-        val bottom = size.height
+        // 基准线：热区直角顶点/圆心所在的高度。偏移为 0 时即屏幕底边（原行为）。
+        val offset = bottomOffsetDp.dp.toPx()
+        val bottom = size.height - offset
         val arcSize = Size(radius * 2f, radius * 2f)
         val strokeWidth = 2.dp.toPx()
         val dash = PathEffect.dashPathEffect(floatArrayOf(7.dp.toPx(), 5.dp.toPx()))
+
+        // 基准线示意：只有非贴底时才画，避免 0 偏移下多一条无意义的线。
+        if (offset > 0.5f) {
+            drawLine(
+                color = activeColor.copy(alpha = 0.45f),
+                start = Offset(0f, bottom),
+                end = Offset(size.width, bottom),
+                strokeWidth = strokeWidth,
+                pathEffect = dash,
+            )
+        }
 
         fun drawSector(startAngle: Float, topLeft: Offset, enabled: Boolean) {
             val color = if (enabled) activeColor else inactiveColor
