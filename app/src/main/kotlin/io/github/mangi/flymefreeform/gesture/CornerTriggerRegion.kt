@@ -18,19 +18,23 @@ import kotlin.math.max
  * @param horizontalPx 三角形横向长度（沿底边，px）
  * @param verticalPx 三角形纵向高度（沿侧边，px）
  * @param radiusPx 扇形半径（px）
+ * @param bottomOffsetPx 热区基准线离屏幕底边的高度（px）。
+ *   所有形状的直角顶点 / 圆心都位于这条线上：0 即原来的「贴底角」，
+ *   调大则整块热区（连同扇形圆心）沿侧边上移。
  */
 internal data class TriggerHitZone(
     val shape: TriggerShape,
     val horizontalPx: Float,
     val verticalPx: Float,
     val radiusPx: Float,
+    val bottomOffsetPx: Float = 0f,
 ) {
     /**
      * 纵向预筛上限：任何形状的纵向延伸都不会超过「纵向长度」与「半径」中的较大者。
      * 用于在逐点判定前先排掉远离底边的绝大多数触摸事件；
      * 宿主角落输入窗口的边长取它与 [horizontalLimitPx] 的较大者。
      */
-    val verticalLimitPx: Float = max(verticalPx, radiusPx)
+    val verticalLimitPx: Float = max(verticalPx, radiusPx) + bottomOffsetPx
 
     /** 横向预筛上限，同理（供宿主决定角落输入窗口要开多大）。 */
     val horizontalLimitPx: Float = max(horizontalPx, radiusPx)
@@ -57,13 +61,15 @@ internal data class TriggerHitZone(
     fun contains(inwardFromEdge: Float, fromBottom: Float): Boolean {
         if (fromBottom < 0f || fromBottom > verticalLimitPx) return false
         if (inwardFromEdge < 0f) return false
+        // 换算到以基准线为原点的局部坐标：偏移为 0 时与原判定完全等价。
+        val localFromBottom = fromBottom - bottomOffsetPx
         return when (shape) {
-            TriggerShape.Sector -> hypot(inwardFromEdge, fromBottom) <= radiusPx
+            TriggerShape.Sector -> hypot(inwardFromEdge, localFromBottom) <= radiusPx
             TriggerShape.Triangle ->
                 inwardFromEdge <= horizontalPx &&
-                    fromBottom <= verticalPx &&
+                    localFromBottom <= verticalPx &&
                     // 斜边：x/宽 + y/高 ≤ 1（宽、高均被钳制为 > 0，不存在除零）
-                    (inwardFromEdge / horizontalPx + fromBottom / verticalPx) <= 1f
+                    (inwardFromEdge / horizontalPx + localFromBottom / verticalPx) <= 1f
         }
     }
 }
@@ -86,6 +92,7 @@ internal object CornerTriggerRegion {
         horizontalDp: Int,
         verticalDp: Int,
         density: Float,
+        bottomOffsetDp: Int = 0,
     ): TriggerHitZone {
         val safeDensity = density.takeIf { it.isFinite() && it > 0f } ?: 1f
         return TriggerHitZone(
@@ -93,6 +100,7 @@ internal object CornerTriggerRegion {
             horizontalPx = ModulePreferences.coerceTriggerExtentDp(horizontalDp) * safeDensity,
             verticalPx = ModulePreferences.coerceTriggerExtentDp(verticalDp) * safeDensity,
             radiusPx = ModulePreferences.coerceCornerTriggerRangeDp(triggerRangeDp) * safeDensity,
+            bottomOffsetPx = ModulePreferences.coerceTriggerBottomOffsetDp(bottomOffsetDp) * safeDensity,
         )
     }
 
@@ -108,6 +116,7 @@ internal object CornerTriggerRegion {
             horizontalDp = settings.triggerHorizontalDp,
             verticalDp = settings.triggerVerticalDp,
             density = density,
+            bottomOffsetDp = settings.triggerBottomOffsetDp,
         )
 
     /**

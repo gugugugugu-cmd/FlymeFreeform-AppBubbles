@@ -16,6 +16,8 @@ internal data class ModuleSettingsSnapshot(
     val triggerHorizontalDp: Int = ModulePreferences.DEFAULT_CORNER_TRIGGER_RANGE_DP,
     /** @author bomo 触发热区纵向高度 dp（三角形使用）；未配置时沿用扇形半径值。 */
     val triggerVerticalDp: Int = ModulePreferences.DEFAULT_CORNER_TRIGGER_RANGE_DP,
+    /** @author bomo 热区基准线上移量 dp：0 表示紧贴屏幕底边，调大可把整块热区抬高。 */
+    val triggerBottomOffsetDp: Int = ModulePreferences.DEFAULT_TRIGGER_BOTTOM_OFFSET_DP,
     /** @author bomo 「全部」面板整体缩放百分比（见 `ModulePreferences.KEY_PANEL_SCALE_PERCENT`）。 */
     val panelScalePercent: Int = ModulePreferences.DEFAULT_PANEL_SCALE_PERCENT,
     val pinsSaved: Boolean = false,
@@ -33,6 +35,15 @@ internal data class ModuleSettingsSnapshot(
 ) {
     fun isPausedByEnvironment(landscape: Boolean, gameMode: Boolean): Boolean =
         (pauseInLandscape && landscape) || (pauseInGameMode && gameMode)
+
+    /**
+     * @author bomo 热区基准线离屏幕底边的像素高度。
+     * 三个宿主进程都通过它换算，避免「怎么把偏移换算成坐标」的口径各写一份。
+     */
+    fun triggerBottomOffsetPx(density: Float): Float {
+        val safeDensity = density.takeIf { it.isFinite() && it > 0f } ?: 1f
+        return ModulePreferences.coerceTriggerBottomOffsetDp(triggerBottomOffsetDp) * safeDensity
+    }
 
     fun writeTo(editor: SharedPreferences.Editor): SharedPreferences.Editor {
         editor
@@ -57,6 +68,10 @@ internal data class ModuleSettingsSnapshot(
             .putInt(
                 ModulePreferences.KEY_TRIGGER_VERTICAL_DP,
                 ModulePreferences.coerceTriggerExtentDp(triggerVerticalDp),
+            )
+            .putInt(
+                ModulePreferences.KEY_TRIGGER_BOTTOM_OFFSET_DP,
+                ModulePreferences.coerceTriggerBottomOffsetDp(triggerBottomOffsetDp),
             )
             .putInt(
                 ModulePreferences.KEY_PANEL_SCALE_PERCENT,
@@ -142,6 +157,13 @@ internal data class ModuleSettingsSnapshot(
                 storedTriggerExtentDp(ModulePreferences.KEY_TRIGGER_HORIZONTAL_DP)
             val triggerVerticalDp =
                 storedTriggerExtentDp(ModulePreferences.KEY_TRIGGER_VERTICAL_DP)
+            val triggerBottomOffsetDp =
+                ModulePreferences.coerceTriggerBottomOffsetDp(
+                    preferences.getInt(
+                        ModulePreferences.KEY_TRIGGER_BOTTOM_OFFSET_DP,
+                        ModulePreferences.DEFAULT_TRIGGER_BOTTOM_OFFSET_DP,
+                    ),
+                )
             val panelScalePercent =
                 ModulePreferences.coercePanelScalePercent(
                     preferences.getInt(
@@ -200,6 +222,7 @@ internal data class ModuleSettingsSnapshot(
                 triggerShape = triggerShape,
                 triggerHorizontalDp = triggerHorizontalDp,
                 triggerVerticalDp = triggerVerticalDp,
+                triggerBottomOffsetDp = triggerBottomOffsetDp,
                 panelScalePercent = panelScalePercent,
                 pinsSaved = pinsSaved,
                 pinnedComponents = pins,

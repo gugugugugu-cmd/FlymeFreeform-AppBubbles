@@ -38,6 +38,8 @@
     <string name="right_corner_summary">从右下角斜向内上滑呼出扇形菜单</string>
     <string name="corner_trigger_range_title">角落触发范围</string>
     <string name="corner_trigger_range_summary">扇形展开半径；范围内手势由扇形菜单接管</string>
+    <string name="trigger_bottom_offset_title">触发区高度</string>
+    <string name="trigger_bottom_offset_summary">0 为贴住屏幕底边；调高可把整块触发区（含菜单圆心）沿侧边往上抬</string>
     <string name="trigger_shape_title">触发热区形状</string>
     <string name="trigger_shape_summary">扇形按半径展开；三角形可分别设置横向与纵向长度</string>
     <string name="trigger_shape_sector">扇形</string>

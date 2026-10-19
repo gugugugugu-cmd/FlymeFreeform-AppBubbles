@@ -13,6 +13,8 @@ internal data class RadialLayout(
     val origin: GesturePoint,
     val radius: Float,
     val itemCenters: List<GesturePoint>,
+    /** @author bomo 圆心离屏幕底边的上移量（px）；热区基准线抬高时菜单同步抬高。 */
+    val bottomOffsetPx: Float = 0f,
 )
 
 internal object RadialGeometry {
@@ -27,9 +29,14 @@ internal object RadialGeometry {
         itemCount: Int,
         offsetX: Float = 0f,
         offsetY: Float = 0f,
+        bottomOffsetPx: Float = 0f,
     ): RadialLayout {
-        val origin = GesturePoint(offsetX + if (side == CornerSide.Left) 0f else width, offsetY + height)
-        if (itemCount <= 0) return RadialLayout(side, origin, radius, emptyList())
+        val origin =
+            GesturePoint(
+                offsetX + if (side == CornerSide.Left) 0f else width,
+                offsetY + height - bottomOffsetPx,
+            )
+        if (itemCount <= 0) return RadialLayout(side, origin, radius, emptyList(), bottomOffsetPx)
         val step = SPAN_DEGREES / itemCount
         val centers =
             List(itemCount) { index ->
@@ -48,7 +55,7 @@ internal object RadialGeometry {
                     y = origin.y + sin(radians) * radius,
                 )
             }
-        return RadialLayout(side, origin, radius, centers)
+        return RadialLayout(side, origin, radius, centers, bottomOffsetPx)
     }
 
     /**
@@ -63,10 +70,15 @@ internal object RadialGeometry {
         itemCount: Int,
         offsetX: Float = 0f,
         offsetY: Float = 0f,
+        bottomOffsetPx: Float = 0f,
     ): RadialLayout {
-        val origin = GesturePoint(offsetX + if (side == CornerSide.Left) 0f else width, offsetY + height)
+        val origin =
+            GesturePoint(
+                offsetX + if (side == CornerSide.Left) 0f else width,
+                offsetY + height - bottomOffsetPx,
+            )
         if (itemCount <= 0 || radiusInner <= 0f) {
-            return RadialLayout(side, origin, radiusInner, emptyList())
+            return RadialLayout(side, origin, radiusInner, emptyList(), bottomOffsetPx)
         }
         val step = SPAN_DEGREES / itemCount
         val centers =
@@ -83,7 +95,7 @@ internal object RadialGeometry {
                     y = origin.y + sin(radians) * radiusInner,
                 )
             }
-        return RadialLayout(side, origin, radiusInner, centers)
+        return RadialLayout(side, origin, radiusInner, centers, bottomOffsetPx)
     }
 
     fun selection(

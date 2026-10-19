@@ -39,6 +39,7 @@ internal fun FlymeFreeformNavHost(
     onTriggerHorizontalDpChange: (Int) -> Unit,
     /** @author bomo 三角形热区纵向高度变更（沿屏幕侧边）。 */
     onTriggerVerticalDpChange: (Int) -> Unit,
+    onTriggerBottomOffsetChange: (Int) -> Unit,
     /** @author bomo 「全部」面板缩放百分比变更。 */
     onPanelScaleChange: (Int) -> Unit,
     onHandleSwipeUpToMiniEnabledChange: (Boolean) -> Unit,
@@ -85,6 +86,7 @@ internal fun FlymeFreeformNavHost(
                         onTriggerShapeChange = onTriggerShapeChange,
                         onTriggerHorizontalDpChange = onTriggerHorizontalDpChange,
                         onTriggerVerticalDpChange = onTriggerVerticalDpChange,
+                        onTriggerBottomOffsetChange = onTriggerBottomOffsetChange,
                         onPanelScaleChange = onPanelScaleChange,
                         onHandleSwipeUpToMiniEnabledChange =
                             onHandleSwipeUpToMiniEnabledChange,

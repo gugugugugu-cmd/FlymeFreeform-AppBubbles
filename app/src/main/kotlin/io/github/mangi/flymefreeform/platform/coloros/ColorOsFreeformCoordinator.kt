@@ -568,6 +568,9 @@ internal class ColorOsFreeformCoordinator(
                 catalog = catalogSnapshot,
                 x = x,
                 y = y,
+                // 热区基准线抬高时菜单圆心同步抬高，否则手势抬到哪儿菜单还从底角展开。
+                bottomOffsetPx =
+                    lastSettings.triggerBottomOffsetPx(context.resources.displayMetrics.density),
             )
             overlay = view
             windowManager.addView(view, params)

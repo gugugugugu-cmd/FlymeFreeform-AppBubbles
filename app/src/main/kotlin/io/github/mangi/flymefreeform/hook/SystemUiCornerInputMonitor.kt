@@ -127,7 +127,7 @@ internal class SystemUiCornerInputMonitor(
             existing.size = size
             existing.view.zone = zone
             try {
-                windowManager.updateViewLayout(existing.view, createLayoutParams(side, size))
+                windowManager.updateViewLayout(existing.view, createLayoutParams(side, size, zone))
             } catch (exception: ReflectiveOperationException) {
                 module.log(Log.WARN, TAG, "SYSTEMUI_CORNER_SPY_UPDATE_FAILED", exception)
                 removeBinding(side, existing)
@@ -149,14 +149,15 @@ internal class SystemUiCornerInputMonitor(
                 onStreamFinished = ::finishStream,
             )
         try {
-            windowManager.addView(view, createLayoutParams(side, size))
+            windowManager.addView(view, createLayoutParams(side, size, zone))
             bindings[side] = CornerBinding(view, size)
             // 「监视器 ready」不等于「热区已建」：审查要求分别留证。
             module.log(
                 Log.INFO,
                 TAG,
                 "SYSTEMUI_CORNER_ZONE_ADDED side=$side size=$size " +
-                    "h=${zone.horizontalLimitPx} v=${zone.verticalLimitPx}",
+                    "h=${zone.horizontalLimitPx} v=${zone.verticalLimitPx} " +
+                    "bottomOffset=${zone.bottomOffsetPx}",
             )
         } catch (exception: ReflectiveOperationException) {
             module.log(Log.WARN, TAG, "SYSTEMUI_CORNER_SPY_ADD_FAILED side=$side", exception)
@@ -217,7 +218,11 @@ internal class SystemUiCornerInputMonitor(
         }
     }
 
-    private fun createLayoutParams(side: CornerSide, size: Int): WindowManager.LayoutParams =
+    private fun createLayoutParams(
+        side: CornerSide,
+        size: Int,
+        zone: TriggerHitZone,
+    ): WindowManager.LayoutParams =
         WindowManager.LayoutParams(
             size,
             size,
@@ -231,6 +236,8 @@ internal class SystemUiCornerInputMonitor(
             gravity =
                 Gravity.BOTTOM or
                     if (side == CornerSide.Left) Gravity.LEFT else Gravity.RIGHT
+            // 热区基准线上移时窗口必须跟着抬起来，否则落在基准线附近的触摸根本进不来。
+            y = Math.round(zone.bottomOffsetPx)
             title = "$CORNER_INPUT_CHANNEL_TITLE-${side.name}"
             layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS

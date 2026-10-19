@@ -21,6 +21,18 @@ internal object ModulePreferences {
 
     /** @author bomo 触发热区纵向高度（沿屏幕侧边，dp）；矩形 / 三角形使用。 */
     const val KEY_TRIGGER_VERTICAL_DP = "trigger_vertical_dp_v1"
+
+    /**
+     * @author bomo 触发热区基准线离屏幕底边的高度（dp）。
+     *
+     * 热区原本以屏幕底角为直角顶点/圆心；把这个值调大，整块热区（连同扇形的圆心）
+     * 会沿侧边上移，等效于「角落不在最底边、而是往上抬了一段」。
+     * 所有形状共用这一个量，便于一次调节。
+     */
+    const val KEY_TRIGGER_BOTTOM_OFFSET_DP = "trigger_bottom_offset_dp_v1"
+    const val DEFAULT_TRIGGER_BOTTOM_OFFSET_DP = 0
+    const val MIN_TRIGGER_BOTTOM_OFFSET_DP = 0
+    const val MAX_TRIGGER_BOTTOM_OFFSET_DP = 240
     const val KEY_CORNER_PINS = "corner_pins_v1"
     const val KEY_HANDLE_SWIPE_UP_TO_MINI_ENABLED = "handle_swipe_up_to_mini_enabled"
     const val KEY_PAUSE_IN_LANDSCAPE = "pause_in_landscape"
@@ -108,6 +120,10 @@ internal object ModulePreferences {
     /** @author bomo 触发热区横/纵向长度钳制（三角形用）。 */
     fun coerceTriggerExtentDp(value: Int): Int =
         value.coerceIn(MIN_TRIGGER_EXTENT_DP, MAX_TRIGGER_EXTENT_DP)
+
+    /** @author bomo 热区基准线上移量钳制。 */
+    fun coerceTriggerBottomOffsetDp(value: Int): Int =
+        value.coerceIn(MIN_TRIGGER_BOTTOM_OFFSET_DP, MAX_TRIGGER_BOTTOM_OFFSET_DP)
 
     /** @author bomo 面板缩放百分比钳制；下限防止条目小到点不中，上限即原尺寸。 */
     fun coercePanelScalePercent(value: Int): Int =

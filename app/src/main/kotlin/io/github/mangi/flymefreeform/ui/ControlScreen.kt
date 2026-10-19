@@ -99,6 +99,8 @@ internal fun ControlScreen(
     onTriggerHorizontalDpChange: (Int) -> Unit,
     /** @author bomo 三角形热区纵向高度变更（沿屏幕侧边）。 */
     onTriggerVerticalDpChange: (Int) -> Unit,
+    /** @author bomo 热区基准线离屏幕底边的高度变更（0 = 贴底角）。 */
+    onTriggerBottomOffsetChange: (Int) -> Unit,
     /** @author bomo 「全部」面板缩放百分比变更（设置界面滑条，热生效）。 */
     onPanelScaleChange: (Int) -> Unit,
     onHandleSwipeUpToMiniEnabledChange: (Boolean) -> Unit,
@@ -181,6 +183,7 @@ internal fun ControlScreen(
                             onTriggerShapeChange = onTriggerShapeChange,
                             onTriggerHorizontalDpChange = onTriggerHorizontalDpChange,
                             onTriggerVerticalDpChange = onTriggerVerticalDpChange,
+                            onTriggerBottomOffsetChange = onTriggerBottomOffsetChange,
                             onCornerRangePreviewChange = { cornerRangePreview = it },
                             onPanelScaleChange = onPanelScaleChange,
                             onNavigateToPinnedApps,
@@ -386,6 +389,8 @@ private fun SettingsCard(
     onTriggerHorizontalDpChange: (Int) -> Unit,
     /** @author bomo 三角形热区纵向高度变更。 */
     onTriggerVerticalDpChange: (Int) -> Unit,
+    /** @author bomo 热区基准线高度变更。 */
+    onTriggerBottomOffsetChange: (Int) -> Unit,
     onCornerRangePreviewChange: (TriggerRangePreview?) -> Unit,
     /** @author bomo 「全部」面板缩放百分比变更。 */
     onPanelScaleChange: (Int) -> Unit,
@@ -521,6 +526,33 @@ private fun SettingsCard(
                 onCommit = onCornerTriggerRangeChange,
             )
         }
+        // [MINIS] 触发热区基准线高度：不改形状/半径，只把整块热区连同菜单圆心沿侧边抬高。
+        RemoteDpSliderPreference(
+            icon = Icons.Rounded.VerticalAlignTop,
+            confirmedValue = state.settings.triggerBottomOffsetDp,
+            isUpdating = state.isUpdating,
+            enabled = state.canChangeSettings,
+            title = stringResource(R.string.trigger_bottom_offset_title),
+            summary = stringResource(R.string.trigger_bottom_offset_summary),
+            onPreviewChange = { },
+            onCommit = onTriggerBottomOffsetChange,
+            coerce = { ModulePreferences.coerceTriggerBottomOffsetDp(it) },
+            minDp = ModulePreferences.MIN_TRIGGER_BOTTOM_OFFSET_DP,
+            maxDp = ModulePreferences.MAX_TRIGGER_BOTTOM_OFFSET_DP,
+        )
+        RemoteDpSliderPreference(
+            icon = Icons.Rounded.VerticalAlignTop,
+            confirmedValue = state.settings.triggerBottomOffsetDp,
+            isUpdating = state.isUpdating,
+            enabled = state.canChangeSettings,
+            title = stringResource(R.string.trigger_bottom_offset_title),
+            summary = stringResource(R.string.trigger_bottom_offset_summary),
+            onPreviewChange = { },
+            onCommit = onTriggerBottomOffsetChange,
+            coerce = { ModulePreferences.coerceTriggerBottomOffsetDp(it) },
+            minDp = ModulePreferences.MIN_TRIGGER_BOTTOM_OFFSET_DP,
+            maxDp = ModulePreferences.MAX_TRIGGER_BOTTOM_OFFSET_DP,
+        )
         // @author bomo 面板缩放滑条：写入远端配置后，侧边栏进程在**下次打开面板**时读取，
         // 因此调整后无需重启/重装即可看到效果。
         RemotePercentSliderPreference(

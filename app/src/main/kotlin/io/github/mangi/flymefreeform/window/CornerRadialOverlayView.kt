@@ -136,6 +136,9 @@ internal class CornerRadialOverlayView(
         get() = side
     private var latestX = 0f
     private var latestY = 0f
+
+    /** @author bomo 圆心离屏幕底边的上移量（px），由热区基准线高度换算，见 updateLayout。 */
+    private var radialBottomOffsetPx = 0f
     private var selectedIndex: Int? = null
     private var dismissing = false
     private var dismissNotified = false
@@ -187,9 +190,11 @@ internal class CornerRadialOverlayView(
         catalog: AppCatalogSnapshot,
         x: Float,
         y: Float,
+        bottomOffsetPx: Float = 0f,
     ) {
         check(!isAttachedToWindow) { "Overlay must be initialized before it is attached" }
         this.side = side
+        this.radialBottomOffsetPx = bottomOffsetPx
         this.catalog = catalog
         latestX = x
         latestY = y
@@ -861,6 +866,7 @@ internal class CornerRadialOverlayView(
                 offsetY = radialInsets.top,
                 radius = metrics.radial.radius,
                 itemCount = outerApps.size + 1,
+                bottomOffsetPx = radialBottomOffsetPx,
             )
         val innerCenters =
             if (innerApps.isEmpty() || metrics.radial.innerRadius <= 0f) {
@@ -874,6 +880,7 @@ internal class CornerRadialOverlayView(
                     itemCount = innerApps.size,
                     offsetX = radialInsets.left,
                     offsetY = radialInsets.top,
+                    bottomOffsetPx = radialBottomOffsetPx,
                 ).itemCenters
             }
         layoutState.value =
@@ -882,6 +889,7 @@ internal class CornerRadialOverlayView(
                 origin = outerLayout.origin,
                 radius = outerLayout.radius,
                 itemCenters = outerLayout.itemCenters + innerCenters,
+                bottomOffsetPx = radialBottomOffsetPx,
             )
         if (!panelModeState.value && !dismissing) updateGestureFromLatestPoint()
     }

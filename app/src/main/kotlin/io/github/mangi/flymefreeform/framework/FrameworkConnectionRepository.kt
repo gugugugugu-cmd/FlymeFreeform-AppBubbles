@@ -120,6 +120,18 @@ internal class FrameworkConnectionRepository(
         }
 
     /**
+     * @author bomo 设置触发热区基准线离屏幕底边的高度（dp）。
+     * 0 表示紧贴底角；调大后整块热区连同菜单圆心沿侧边上移。
+     */
+    fun setTriggerBottomOffsetDp(offsetDp: Int) =
+        updateSettings {
+            it.copy(
+                triggerBottomOffsetDp =
+                    ModulePreferences.coerceTriggerBottomOffsetDp(offsetDp),
+            )
+        }
+
+    /**
      * @author bomo 设置「全部」面板的整体缩放百分比。
      * 只写配置；面板在**下次打开**时读取，因此不需要重启或重装。
      */
