@@ -10,18 +10,6 @@ cat > skel/AndroidManifest.xml <<'XML'
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="35" />
 </manifest>
 XML
-cat > skel/apktool.yml <<'YML'
-version: 2.10.0
-apkFileName: empty.apk
-isFrameworkApk: false
-sdkInfo:
-  minSdkVersion: '29'
-  targetSdkVersion: '35'
-packageInfo:
-  forcedPackageId: '127'
-usesFramework:
-  ids: [1]
-YML
 java -jar /usr/local/bin/apktool.jar b skel -o skel/empty.apk
 cp skel/empty.apk out/base.apk
 rm -f out/classes.dex
