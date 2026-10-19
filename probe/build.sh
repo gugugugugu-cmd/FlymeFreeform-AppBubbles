@@ -2,8 +2,8 @@
 set -ex
 BT="$SDK_ROOT/build-tools/35.0.0"
 JAR="$SDK_ROOT/platforms/android-35/android.jar"
-rm -rf out skel apkroot
-mkdir -p out/classes out/dex skel/res out/meta/META-INF/xposed
+rm -rf out skel
+mkdir -p out/classes out/dex skel/res out/meta/META-INF/xposed out/apkassets/META-INF/xposed
 
 # 1) 编译 dex
 javac -nowarn -source 11 -target 11 -d out/classes -cp "$JAR" probe/Probe.java
@@ -13,26 +13,17 @@ javac -nowarn -source 11 -target 11 -d out/classes -cp "$JAR" probe/Probe.java
 printf 'minApiVersion=102\ntargetApiVersion=102\nstaticScope=false\n' > out/meta/META-INF/xposed/module.prop
 printf 'io.github.mangi.flymefreeformprobe.Probe\nhook\n' > out/meta/META-INF/xposed/java_init.list
 printf 'com.android.launcher\ncom.google.android.apps.nexuslauncher\ncom.android.systemui\n' > out/meta/META-INF/xposed/scope.list
+cp out/dex/classes.dex out/apkassets/classes.dex
+cp out/meta/META-INF/xposed/* out/apkassets/META-INF/xposed/
 
-# 3) 资源与清单
-"$BT/aapt2" compile --dir skel -o skel/res.zip
-"$BT/aapt2" link -o out/base.apk -I "$JAR" --manifest probe/AndroidManifest.xml \
-    --min-sdk-version 29 --target-sdk-version 35 skel/res.zip
-
-# 4) 合入 dex 与元数据，resources.arsc / AndroidManifest 保持不压缩
+# 3) 资源、清单、dex 与元数据一次性由 aapt2 组装
+#    aapt2 会按 4 字节对齐 resources.arsc，并可用 -0 指定不压缩条目。
 OUT="$PWD/out"
-rm -rf "$OUT/apkroot" && mkdir "$OUT/apkroot"
-cd "$OUT/apkroot"
-unzip -o -q "$OUT/base.apk"
-cp "$OUT/dex/classes.dex" .
-cp -r "$OUT/meta/." .
-rm -f "$OUT/final.apk"
-# resources.arsc / AndroidManifest 必须不压缩；其它条目一次性写入，缺文件直接失败
-(cd "$OUT/apkroot" && ls -1 resources.arsc AndroidManifest.xml classes.dex > /tmp/list0.txt)
-(cd "$OUT/apkroot" && zip -q -0 -@ "$OUT/final.apk" < /tmp/list0.txt)
-(cd "$OUT/apkroot" && find META-INF/xposed -type f > /tmp/list1.txt && test -s /tmp/list1.txt)
-(cd "$OUT/apkroot" && zip -q -X -@ "$OUT/final.apk" < /tmp/list1.txt)
-cd "$OUT"
+"$BT/aapt2" compile --dir skel -o skel/res.zip
+"$BT/aapt2" link -I "$JAR" --manifest probe/AndroidManifest.xml \
+    --min-sdk-version 29 --target-sdk-version 35 \
+    -A "$OUT/apkassets" -0 arsc -0 xml \
+    -o "$OUT/final.apk" skel/res.zip
 unzip -v "$OUT/final.apk"
 
 # 5) 对齐 + 签名
