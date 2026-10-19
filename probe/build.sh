@@ -33,6 +33,6 @@ javac -nowarn -source 11 -target 11 -d out/classes -cp "$JAR" probe/Probe.java
 "$BT/d8" --min-api 29 --lib "$JAR" --output out $(find out/classes -name '*.class')
 
 keytool -genkeypair -keystore /tmp/k.jks -storepass android -keypass android -alias k -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=probe"
-"$BT/apksigner" sign --ks /tmp/k.jks --ks-pass pass:android --key-pass pass:android --out out/probe-signed.apk out/base.apk
+"$BT/apksigner" sign --ks /tmp/k.jks --ks-pass pass:android --key-pass pass:android --min-sdk-version 29 --out out/probe-signed.apk out/base.apk
 unzip -l out/probe-signed.apk
 "$BT/apksigner" verify out/probe-signed.apk
