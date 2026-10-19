@@ -2,28 +2,38 @@
 set -ex
 BT="$SDK_ROOT/build-tools/35.0.0"
 JAR="$SDK_ROOT/platforms/android-35/android.jar"
-rm -rf out skel
-mkdir -p out/classes out/dex skel/res out/meta/META-INF/xposed out/apkassets/META-INF/xposed
-
-# 1) 编译 dex
-javac -nowarn -source 11 -target 11 -d out/classes -cp "$JAR" probe/Probe.java
-"$BT/d8" --min-api 29 --lib "$JAR" --output out/dex $(find out/classes -name '*.class')
-
-# 2) libxposed 元数据（缺了这三样 LSPosed 不会当模块）
-printf 'minApiVersion=102\ntargetApiVersion=102\nstaticScope=false\n' > out/meta/META-INF/xposed/module.prop
-printf 'io.github.mangi.flymefreeformprobe.Probe\nhook\n' > out/meta/META-INF/xposed/java_init.list
-printf 'com.android.launcher\ncom.google.android.apps.nexuslauncher\ncom.android.systemui\n' > out/meta/META-INF/xposed/scope.list
-cp out/dex/classes.dex out/apkassets/classes.dex
-cp out/meta/META-INF/xposed/* out/apkassets/META-INF/xposed/
-
-# 3) 资源、清单、dex 与元数据一次性由 aapt2 组装
-#    aapt2 会按 4 字节对齐 resources.arsc，并可用 -0 指定不压缩条目。
 OUT="$PWD/out"
+rm -rf out skel
+mkdir -p "$OUT/classes" "$OUT/dex" "$OUT/meta/META-INF/xposed" skel/res
+
+# 1) dex
+javac -nowarn -source 11 -target 11 -d "$OUT/classes" -cp "$JAR" probe/Probe.java
+"$BT/d8" --min-api 29 --lib "$JAR" --output "$OUT/dex" $(find "$OUT/classes" -name '*.class')
+
+# 2) libxposed 元数据（缺这三样 LSPosed 不认）
+printf 'minApiVersion=102\ntargetApiVersion=102\nstaticScope=false\n' > "$OUT/meta/META-INF/xposed/module.prop"
+printf 'io.github.mangi.flymefreeformprobe.Probe\nhook\n' > "$OUT/meta/META-INF/xposed/java_init.list"
+printf 'com.android.launcher\ncom.google.android.apps.nexuslauncher\ncom.android.systemui\n' > "$OUT/meta/META-INF/xposed/scope.list"
+
+# 3) 资源 + 清单 -> base.apk（本步产生的 arsc 会在下一步重写为 stored）
 "$BT/aapt2" compile --dir skel -o skel/res.zip
 "$BT/aapt2" link -I "$JAR" --manifest probe/AndroidManifest.xml \
     --min-sdk-version 29 --target-sdk-version 35 \
-    -A "$OUT/apkassets" -0 arsc -0 xml \
-    -o "$OUT/final.apk" skel/res.zip
+    -o "$OUT/base.apk" skel/res.zip
+
+# 4) 解包后追加 dex 与元数据到 APK 根目录
+rm -rf "$OUT/apkroot" && mkdir -p "$OUT/apkroot/META-INF/xposed"
+cd "$OUT/apkroot"
+unzip -o -q "$OUT/base.apk"
+cp "$OUT/dex/classes.dex" .
+cp "$OUT/meta/META-INF/xposed/module.prop" .
+cp "$OUT/meta/META-INF/xposed/java_init.list" META-INF/xposed/
+cp "$OUT/meta/META-INF/xposed/scope.list" META-INF/xposed/
+rm -f "$OUT/final.apk"
+zip -q -0 -X "$OUT/final.apk" resources.arsc
+zip -q -X "$OUT/final.apk" AndroidManifest.xml classes.dex \
+    META-INF/xposed/module.prop META-INF/xposed/java_init.list META-INF/xposed/scope.list
+cd "$OUT"
 unzip -v "$OUT/final.apk"
 
 # 5) 对齐 + 签名
