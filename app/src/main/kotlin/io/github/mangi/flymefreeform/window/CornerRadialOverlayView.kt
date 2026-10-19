@@ -238,6 +238,12 @@ internal class CornerRadialOverlayView(
     }
 
     fun cancelGesture() {
+        // @author bomo 诊断：向上游取消（桌面/系统抢走触摸流、多指、宿主主动取消）留痕，
+        // 与「用户抬手且未选中」的 dismissAnimated 区分开。
+        moduleLog(
+            "RADIAL_GESTURE_CANCELLED selected=$selectedIndex " +
+                "x=${latestX.toInt()} y=${latestY.toInt()}",
+        )
         dismissAnimated()
     }
 

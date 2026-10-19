@@ -147,6 +147,7 @@ internal class SystemUiCornerInputMonitor(
                 canClaim = { canClaim(side) },
                 pilfer = ::pilfer,
                 onStreamFinished = ::finishStream,
+                trace = { code -> this.module.log(Log.INFO, TAG, code) },
             )
         try {
             windowManager.addView(view, createLayoutParams(side, size, zone))
@@ -269,6 +270,8 @@ internal class SystemUiCornerInputMonitor(
         private val canClaim: () -> Boolean,
         private val pilfer: (View) -> Boolean,
         private val onStreamFinished: () -> Unit,
+        /** @author bomo 诊断：记录触摸流结束方式，用于区分「桌面/系统手势抢走」与「用户抬手」。 */
+        private val trace: (String) -> Unit = {},
     ) : View(context) {
         private val gestureEngine = CornerGestureEngine()
         private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
@@ -277,6 +280,9 @@ internal class SystemUiCornerInputMonitor(
         private var activePointerId = -1
         private var tracking = false
         private var pilferAttempted = false
+        private var streamStartUptime = 0L
+        private var lastEventUptime = 0L
+        private var pilferAccepted = false
 
         val streamActive: Boolean
             get() = tracking
@@ -297,6 +303,8 @@ internal class SystemUiCornerInputMonitor(
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     resetTracking()
+                    streamStartUptime = event.eventTime
+                    lastEventUptime = event.eventTime
                     val eligible =
                         event.pointerCount == 1 &&
                             event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER &&
@@ -353,7 +361,11 @@ internal class SystemUiCornerInputMonitor(
                             }
                         if (!pilferAttempted && action is GestureAction.Activate) {
                             pilferAttempted = true
-                            pilfer(this)
+                            pilferAccepted = pilfer(this)
+                            trace(
+                                "RADIAL_PILFER attempt=1 accepted=$pilferAccepted " +
+                                    "afterMs=${event.eventTime - streamStartUptime}",
+                            )
                         }
                     }
                 }
@@ -364,15 +376,30 @@ internal class SystemUiCornerInputMonitor(
 
                 MotionEvent.ACTION_UP,
                 MotionEvent.ACTION_CANCEL -> {
+                    val claimedBefore = gestureEngine.isClaimed
                     if (event.actionMasked == MotionEvent.ACTION_UP && tracking) {
                         gestureEngine.up(event.getPointerId(event.actionIndex))
                     }
+                    trace(
+                        "RADIAL_STREAM_END how=" +
+                            (if (event.actionMasked == MotionEvent.ACTION_UP) "up" else "cancel") +
+                            " claimed=$claimedBefore pilfer=$pilferAccepted" +
+                            " afterMs=${event.eventTime - streamStartUptime}" +
+                            " idleMs=${event.eventTime - lastEventUptime}",
+                    )
                     resetTracking()
                     onStreamFinished()
                 }
 
-                else -> Unit
+                else -> {
+                    trace(
+                        "RADIAL_STREAM_INTERRUPT action=${event.actionMasked}" +
+                            " pointers=${event.pointerCount}" +
+                            " afterMs=${event.eventTime - streamStartUptime}",
+                    )
+                }
             }
+            lastEventUptime = event.eventTime
             return true
         }
 
