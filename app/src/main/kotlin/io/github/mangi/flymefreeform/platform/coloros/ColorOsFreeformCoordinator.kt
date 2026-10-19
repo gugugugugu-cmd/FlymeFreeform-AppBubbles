@@ -1,0 +1,1100 @@
+package io.github.mangi.flymefreeform.platform.coloros
+
+import android.content.BroadcastReceiver
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.content.IntentFilter
+import android.graphics.PixelFormat
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.provider.Settings
+import android.util.Log
+import android.view.Display
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.ViewConfiguration
+import android.view.WindowManager
+import io.github.mangi.flymefreeform.config.ConfigSnapshotCodec
+import io.github.mangi.flymefreeform.config.ModulePreferences
+import io.github.mangi.flymefreeform.config.SharedSettings
+import java.util.ArrayDeque
+import io.github.mangi.flymefreeform.config.ToolCatalogCodec
+import io.github.mangi.flymefreeform.config.ModuleSettingsSnapshot
+import io.github.mangi.flymefreeform.config.SharedStateProtocol
+import io.github.mangi.flymefreeform.gesture.AdaptiveCornerGestureConfig
+import io.github.mangi.flymefreeform.gesture.CornerGestureConfig
+import io.github.mangi.flymefreeform.gesture.CornerGestureEngine
+import io.github.mangi.flymefreeform.gesture.CornerTriggerRegion
+import io.github.mangi.flymefreeform.gesture.GestureAction
+import io.github.mangi.flymefreeform.hook.ModuleEnvironmentState
+import io.github.mangi.flymefreeform.hook.ProcessConfiguration
+import io.github.mangi.flymefreeform.platform.common.AppLaunchCommitter
+import io.github.mangi.flymefreeform.platform.common.FallbackLaunchResult
+import io.github.mangi.flymefreeform.platform.common.FallbackLauncher
+import io.github.mangi.flymefreeform.platform.common.GestureBubbleIpcClient
+import io.github.mangi.flymefreeform.platform.common.GestureBubbleIpcProtocol
+import io.github.mangi.flymefreeform.platform.common.SystemServerAccess
+import io.github.mangi.flymefreeform.window.CornerRadialOverlayView
+import java.lang.reflect.Proxy
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+
+/** system_server 中的唯一长期所有者：WMS 指针监听、Overlay、目录缓存与启动适配。 */
+internal class ColorOsFreeformCoordinator(
+    private val systemServer: SystemServerAccess,
+    private val classLoader: ClassLoader,
+    private val configuration: ProcessConfiguration,
+    private val environmentState: ModuleEnvironmentState,
+    private val logger: (priority: Int, code: String, throwable: Throwable?) -> Unit,
+    /**
+     * 平台无关提交接口（阶段 2 / 任务书 §5.2.1）。
+     *
+     * **默认即接入**：手势选中应用后先走 [GestureBubbleIpcClient]，
+     * 由它跨进程把请求送给 SystemUI 的 Pixel 气泡后端（见 [GestureBubbleIpcProtocol]）。
+     * 之所以在协调器内部构造而不是由 installer 注入：提交器必须用 system_server 的
+     * Context 发广播，而 installer 拿不到该 Context。注入仅用于测试替身。
+     */
+    private val injectedCommitter: AppLaunchCommitter? = null,
+    /**
+     * 明确拒绝（`Outcome.Rejected`）时的回退启动（审查意见 P1）。
+     *
+     * **必须按平台注入**：旧实现在协调器内硬编码 `ColorOsFreeformLauncher`，
+     * 导致 Pixel 上被明确拒绝后仍带着 ColorOS 的 `mZoomLaunchFlags` /
+     * `setLaunchWindowingMode(100)` 走厂商自由窗协议。现在由 installer 决定：
+     * AOSP 用 [io.github.mangi.flymefreeform.platform.pixel.PixelFallbackLauncher]（普通全屏）。
+     */
+    private val fallbackLauncher: FallbackLauncher =
+        ColorOsFreeformLauncher(systemServer.context),
+) : CornerRadialOverlayView.Listener {
+    private val context = systemServer.context
+
+    /**
+     * 实际使用的提交器（见构造参数注释）。
+     *
+     * 惰性构造：IPC 客户端需要 `context`，只能在 `context` 就绪后创建；
+     * 注入替身时优先生效，便于单元测试。
+     */
+    private val committer: AppLaunchCommitter by lazy {
+        injectedCommitter ?: GestureBubbleIpcClient(context, logger)
+    }
+    private val handler = Handler(Looper.getMainLooper())
+    private val catalogExecutor =
+        ThreadPoolExecutor(
+            1,
+            1,
+            0L,
+            TimeUnit.MILLISECONDS,
+            ArrayBlockingQueue<Runnable>(1),
+            { task -> Thread(task, CATALOG_THREAD_NAME) },
+            ThreadPoolExecutor.DiscardOldestPolicy(),
+        )
+    private val windowManager = context.getSystemService(WindowManager::class.java)
+    private val gestureEngine = CornerGestureEngine()
+    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+
+    private val sidebar = ColorOsSidebarClient(context, handler, logger)
+    @Volatile
+    private var latestToolCatalog: String? = null
+
+    /** 最近小窗内存列表（头部最新）；跨重启由配置播种，跨进程由 Settings.Global 供读。 */
+    private val recentFreeformEntries = ArrayDeque<ComponentName>()
+
+    /** 最近一次指针位置；工具执行时作为 PageRout 点击坐标传给侧边栏。 */
+    @Volatile
+    private var latestPointerX = 0f
+
+    @Volatile
+    private var latestPointerY = 0f
+
+    private val appCatalog =
+        ColorOsAppCatalog(
+            context,
+            catalogExecutor,
+            logger,
+            toolCatalog = { latestToolCatalog ?: configuration.readToolCatalog() },
+        ) { snapshot ->
+            handler.post {
+                // 后台任务完成时配置可能已再次变化，旧结果不得覆盖新外观。
+                if (snapshot.matches(lastSettings)) {
+                    catalogSnapshot = snapshot
+                    overlay?.updateRadialAppearance(snapshot)
+                }
+            }
+        }
+    init {
+        // 侧边栏直发 App 的广播会被 ColorOS 后台启动管控拦截，改经 system_server 转发。
+        sidebar.onToolCatalog = ::publishToolCatalogToApp
+        // 「最近小窗」点击：侧边栏无法自建小窗，转回 system_server 走既有启动链路。
+        sidebar.onRecentComponent = { component ->
+            handler.post { publishRecentFreeform(component) }
+        }
+        sidebar.onLaunchComponent = { component ->
+            handler.post {
+                if (isGestureEnvironmentAllowed()) {
+                    launchCommittedApp(RadialAppEntry(component, component.className, EMPTY_ICON))
+                }
+            }
+        }
+    }
+
+    private val packageReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (lastSettings.enabled) appCatalog.refresh(lastSettings)
+            }
+        }
+
+    @Volatile
+    private var catalogSnapshot = AppCatalogSnapshot()
+    private var pointerListener: Any? = null
+    @Volatile
+    private var pointerRegistered = false
+    @Volatile
+    private var pointerGeneration = 0L
+    private var overlay: CornerRadialOverlayView? = null
+    private var morePanelActive = false
+    private var lastSettings = ModuleSettingsSnapshot(enabled = false)
+    private var activeEnvironmentApproved = false
+    private var activeGestureConfig: CornerGestureConfig? = null
+    private val pointerQueueLock = Any()
+    private var pendingMove: QueuedPointerEvent? = null
+    private var movePosted = false
+    private var lastOverlayFailureLogAt = -OVERLAY_FAILURE_LOG_INTERVAL_MS
+
+    fun start() {
+        handler.post {
+            // @author bomo 仅系统服务启动时同步隐藏选项，避免旧窗口参数与实时区域出现半切换状态。
+            syncNativeSidebarSetting(configuration.snapshot.hideNativeSidebar)
+            recentFreeformEntries.addAll(configuration.readRecentFreeform())
+            registerToolRequestReceiver()
+            registerConfigPushReceiver()
+            // 开机主动拉目录：Settings 副本不再依赖"用户先开一次面板"。
+            sidebar.requestToolCatalog()
+            environmentState.start(context)
+            environmentState.observe { applySettings(configuration.snapshot) }
+            registerPackageObserver()
+            configuration.observe {
+                handler.post { applySettings(configuration.snapshot) }
+            }
+        }
+        // 关键：applySettings 原本只在 configuration.observe{} 回调里被调用。
+        // 开机若收不到配置推送，registerPointerListener() 永远不会执行，
+        // 表现为「协调器 READY 但没有任何 POINTER 日志、手势全无反应」。
+        // 启动时主动应用一次当前快照，让指针监听尽早挂上。
+        try {
+            applySettings(configuration.snapshot)
+            logger(Log.INFO, "SYSTEM_SETTINGS_APPLIED_ON_START", null)
+        } catch (t: Throwable) {
+            logger(Log.WARN, "SYSTEM_SETTINGS_APPLY_ON_START_FAILED", t)
+        }
+        logger(Log.INFO, "SYSTEM_GESTURE_COORDINATOR_READY", null)
+    }
+
+    private fun registerPackageObserver() {
+        try {
+            val filter =
+                IntentFilter().apply {
+                    addAction(Intent.ACTION_PACKAGE_ADDED)
+                    addAction(Intent.ACTION_PACKAGE_CHANGED)
+                    addAction(Intent.ACTION_PACKAGE_REMOVED)
+                    addAction(Intent.ACTION_PACKAGE_REPLACED)
+                    addDataScheme("package")
+                }
+            // Coordinator 与 system_server 同生命周期；热重载被拒绝，因此只注册一次。
+            context.registerReceiver(packageReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } catch (exception: RuntimeException) {
+            logger(Log.WARN, "PACKAGE_OBSERVER_UNAVAILABLE", exception)
+        }
+    }
+
+    private fun applySettings(settings: ModuleSettingsSnapshot) {
+        val selectionChanged =
+            settings.pinsSaved != lastSettings.pinsSaved ||
+                settings.pinnedComponents != lastSettings.pinnedComponents
+        lastSettings = settings
+        // 诊断：把闸门条件逐项打出来。此前整个分支无日志，导致「READY 但没有 POINTER 行」
+        // 无法区分是条件不满足还是注册失败——真机排查为此多绕了两轮。
+        val gestureAllowed = environmentState.isGestureAllowed(refreshKeyguard = true)
+        val cornerEnabled = settings.leftCornerEnabled || settings.rightCornerEnabled
+        if (!gestureAllowed || !cornerEnabled) {
+            // 把「最可能的原因」单独点名。此前 enabled=false（用户没开总开关）
+            // 埋在 env= 长串里，肉眼极难发现，真机排查为此多绕一轮。
+            val cause =
+                when {
+                    !settings.enabled -> "MODULE_DISABLED_IN_SETTINGS"
+                    !cornerEnabled -> "NO_CORNER_ENABLED"
+                    !environmentState.isModuleAllowed() -> "ENVIRONMENT_BLOCKED"
+                    else -> "GESTURE_NAV_OR_KEYGUARD"
+                }
+            logger(
+                Log.INFO,
+                "SYSTEM_GESTURE_GATE_CLOSED cause=$cause gestureAllowed=$gestureAllowed cornerEnabled=$cornerEnabled " +
+                    "left=${settings.leftCornerEnabled} right=${settings.rightCornerEnabled} " +
+                    "env=${environmentState.describe()}",
+                null,
+            )
+        }
+        if (gestureAllowed && cornerEnabled) {
+            val resuming = !pointerRegistered
+            logger(Log.INFO, "SYSTEM_GESTURE_GATE_OPEN resuming=$resuming", null)
+            registerPointerListener()
+            if (resuming || selectionChanged || !catalogSnapshot.matches(settings) || catalogSnapshot.radialApps.isEmpty()) {
+                appCatalog.refresh(settings, reloadApps = resuming || selectionChanged || catalogSnapshot.radialApps.isEmpty())
+            }
+        } else {
+            sidebar.cancel()
+            unregisterPointerListener()
+            activeEnvironmentApproved = false
+            activeGestureConfig = null
+            gestureEngine.cancel()
+            removeOverlay()
+        }
+    }
+
+    /** @author bomo 在唯一有写权限的系统服务启动时同步入口开关；改动于下次重启生效，失败留诊断。 */
+    private fun syncNativeSidebarSetting(hidden: Boolean) {
+        try {
+            val value = if (hidden) 1 else 0
+            if (Settings.Global.getInt(context.contentResolver, SharedSettings.KEY_HIDE_NATIVE_BAR, -1) == value) return
+            if (Settings.Global.putInt(context.contentResolver, SharedSettings.KEY_HIDE_NATIVE_BAR, value)) {
+                logger(Log.INFO, "NATIVE_SIDEBAR_SETTING hidden=$hidden", null)
+            } else {
+                logger(Log.WARN, "NATIVE_SIDEBAR_SETTING_WRITE_FAILED", null)
+            }
+        } catch (exception: RuntimeException) {
+            logger(Log.WARN, "NATIVE_SIDEBAR_SETTING_WRITE_FAILED", exception)
+        }
+    }
+
+    private fun registerPointerListener() {
+        if (pointerRegistered) return
+        val generation = pointerGeneration
+        try {
+            val listenerInterface =
+                Class.forName(
+                    "android.view.WindowManagerPolicyConstants\$PointerEventListener",
+                    false,
+                    classLoader,
+                )
+            val listener =
+                Proxy.newProxyInstance(classLoader, arrayOf(listenerInterface)) { proxy, method, args ->
+                    when (method.name) {
+                        "onPointerEvent" -> {
+                            val event = args?.firstOrNull() as? MotionEvent
+                            if (event != null) enqueuePointerEvent(event, generation)
+                            null
+                        }
+                        "hashCode" -> System.identityHashCode(proxy)
+                        "equals" -> proxy === args?.firstOrNull()
+                        "toString" -> "FlymeFreeformPointerListener"
+                        else -> null
+                    }
+                }
+            val windowManagerService =
+                try {
+                    readWindowManagerService()
+                } catch (e: Throwable) {
+                    logger(Log.WARN, "SYSTEM_POINTER_LISTENER_NO_WMS", e)
+                    return
+                }
+            // 只接受语义明确的签名白名单，不再「任意同名方法 + 按参数个数猜传参」。
+            // 审查意见：参数个数相同不代表类型和语义相同；若三参方法的第三个参数
+            // 不是 Boolean，反射调用会失败，而异常被捕获并不等于监听器已注册。
+            val resolved =
+                resolvePointerRegistration(windowManagerService.javaClass, listenerInterface)
+            if (resolved == null) {
+                val candidates =
+                    windowManagerService.javaClass.declaredMethods
+                        .filter { it.name == "registerPointerEventListener" }
+                        .map { m ->
+                            m.name + m.parameterTypes.joinToString(",", "(", ")") { it.name }
+                        }
+                logger(
+                    Log.WARN,
+                    "SYSTEM_POINTER_LISTENER_NO_METHOD " +
+                        "listener=${listenerInterface.name} candidates=$candidates",
+                    null,
+                )
+                return
+            }
+            val (register, args) = resolved.let { (m, build) -> m to build(listener) }
+            register.invoke(windowManagerService, *args)
+            pointerListener = listener
+            pointerRegistered = true
+            // 记录实际命中的签名：证明选中的是预期重载，而非碰巧调用成功的其它方法
+            logger(
+                Log.INFO,
+                "SYSTEM_POINTER_LISTENER_REGISTERED sig=${
+                    register.parameterTypes.joinToString(",", "(", ")") { it.simpleName }
+                }",
+                null,
+            )
+        } catch (exception: ReflectiveOperationException) {
+            logger(Log.WARN, "SYSTEM_POINTER_LISTENER_UNAVAILABLE", exception)
+        } catch (exception: RuntimeException) {
+            logger(Log.WARN, "SYSTEM_POINTER_LISTENER_FAILED", exception)
+        }
+    }
+
+    /**
+     * 解析 WMS 上的指针注册方法。
+     *
+     * 白名单（语义已确认）：
+     *   1. registerPointerEventListener(PointerEventListener)            —— 旧版
+     *   2. registerPointerEventListener(PointerEventListener, int)       —— 带 displayId（A17 实机命中）
+     *
+     * 不存在「三参布尔」形态，因此不再支持——那个分支从未被任何设备触发过，
+     * 留着只会带来「误配到无关重载」的风险。
+     *
+     * @return 方法 + 参数构造器；无精确匹配时返回 null。
+     */
+    /**
+     * 解析 WMS 上的指针注册方法——按**完整参数类型**精确匹配。
+     *
+     * 此前用 `!params[0].isPrimitive` 排除首参，只说明它不是基本类型，
+     * 不能证明它就是 PointerEventListener；文档称"精确白名单"而实现更宽，
+     * 属于名实不符。这里改为与真实接口类做相等比较。
+     *
+     * 已确认形态：
+     *   1. (PointerEventListener)                    —— 旧版
+     *   2. (PointerEventListener, int)               —— Android 17 实机命中
+     *
+     * 不存在三参形态；不按参数个数猜传参。
+     */
+    private fun resolvePointerRegistration(
+        type: Class<*>,
+        listenerType: Class<*>,
+    ): Pair<java.lang.reflect.Method, (Any) -> Array<Any?>>? {
+        val candidates =
+            type.declaredMethods.filter {
+                it.name == "registerPointerEventListener" &&
+                    it.parameterTypes.isNotEmpty() &&
+                    it.parameterTypes[0] == listenerType
+            }
+        for (method in candidates) {
+            val params = method.parameterTypes
+            val builder =
+                when {
+                    // (PointerEventListener)
+                    params.size == 1 -> { listener: Any -> arrayOf<Any?>(listener) }
+                    // (PointerEventListener, int)
+                    params.size == 2 && params[1] == Int::class.javaPrimitiveType ->
+                        { listener: Any -> arrayOf<Any?>(listener, Display.DEFAULT_DISPLAY) }
+                    else -> null
+                }
+            if (builder != null) {
+                method.isAccessible = true
+                return method to builder
+            }
+        }
+        return null
+    }
+
+    private fun enqueuePointerEvent(event: MotionEvent, generation: Long) {
+        if (!pointerRegistered || generation != pointerGeneration) return
+        val copy = QueuedPointerEvent(MotionEvent.obtain(event), generation)
+        if (event.actionMasked != MotionEvent.ACTION_MOVE) {
+            val precedingMove =
+                synchronized(pointerQueueLock) {
+                    pendingMove.also { pendingMove = null }
+                }
+            handler.post {
+                precedingMove?.let(::processPointerEvent)
+                processPointerEvent(copy)
+            }
+            return
+        }
+        var shouldPost = false
+        synchronized(pointerQueueLock) {
+            pendingMove?.event?.recycle()
+            pendingMove = copy
+            if (!movePosted) {
+                movePosted = true
+                shouldPost = true
+            }
+        }
+        if (shouldPost) handler.post(::drainPendingMove)
+    }
+
+    private fun drainPendingMove() {
+        val event =
+            synchronized(pointerQueueLock) {
+                movePosted = false
+                pendingMove.also { pendingMove = null }
+            } ?: return
+        processPointerEvent(event)
+    }
+
+    private fun processPointerEvent(queued: QueuedPointerEvent) {
+        latestPointerX = queued.event.x
+        latestPointerY = queued.event.y
+        val event = queued.event
+        try {
+            if (queued.generation != pointerGeneration || !pointerRegistered) return
+            handlePointerEvent(event)
+        } catch (exception: RuntimeException) {
+            gestureEngine.cancel()
+            removeOverlay()
+            unregisterPointerListener()
+            logger(Log.ERROR, "SYSTEM_POINTER_PROCESSING_FAILED", exception)
+        } finally {
+            event.recycle()
+        }
+    }
+
+    private fun unregisterPointerListener() {
+        pointerGeneration++
+        clearPendingMove()
+        val listener = pointerListener ?: return
+        pointerRegistered = false
+        try {
+            val windowManagerService = readWindowManagerService()
+            val unregister = findMethod(windowManagerService.javaClass, "unregisterPointerEventListener", 2)
+            unregister.invoke(windowManagerService, listener, Display.DEFAULT_DISPLAY)
+        } catch (exception: ReflectiveOperationException) {
+            logger(Log.WARN, "SYSTEM_POINTER_LISTENER_REMOVE_FAILED", exception)
+        } catch (exception: RuntimeException) {
+            logger(Log.WARN, "SYSTEM_POINTER_LISTENER_REMOVE_FAILED", exception)
+        } finally {
+            pointerListener = null
+        }
+    }
+
+    private fun clearPendingMove() {
+        synchronized(pointerQueueLock) {
+            pendingMove?.event?.recycle()
+            pendingMove = null
+            movePosted = false
+        }
+    }
+
+    private fun handlePointerEvent(event: MotionEvent) {
+        if (morePanelActive) return
+        val settings = lastSettings
+        if (!pointerRegistered || !environmentState.isGestureAllowed()) {
+            cancelActiveGesture()
+            return
+        }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            activeEnvironmentApproved = isGestureEnvironmentAllowed()
+            if (!activeEnvironmentApproved) {
+                activeGestureConfig = null
+                return
+            }
+        } else if (!activeEnvironmentApproved) {
+            return
+        }
+        if (overlay != null && !isDynamicEnvironmentAllowed()) {
+            activeEnvironmentApproved = false
+            cancelActiveGesture()
+            return
+        }
+        val metrics = context.resources.displayMetrics
+        val config =
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                AdaptiveCornerGestureConfig.create(
+                    displayWidth = metrics.widthPixels.toFloat(),
+                    displayHeight = metrics.heightPixels.toFloat(),
+                    touchSlop = touchSlop,
+                    density = metrics.density,
+                    // @author bomo 热区由设置的形状 + 横/纵长度（三角形）与半径（扇形）决定。
+                    triggerZone = CornerTriggerRegion.of(settings, metrics.density),
+                    leftEnabled = settings.leftCornerEnabled,
+                    rightEnabled = settings.rightCornerEnabled,
+                ).also { activeGestureConfig = it }
+            } else {
+                activeGestureConfig ?: return
+            }
+        val action =
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN ->
+                    gestureEngine.down(event.getPointerId(0), event.x, event.y, config)
+                MotionEvent.ACTION_MOVE -> {
+                    val index = event.findPointerIndex(event.getPointerId(0)).coerceAtLeast(0)
+                    gestureEngine.move(
+                        event.getPointerId(index),
+                        event.pointerCount,
+                        event.getX(index),
+                        event.getY(index),
+                        config,
+                    )
+                }
+                MotionEvent.ACTION_UP -> gestureEngine.up(event.getPointerId(event.actionIndex))
+                MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> gestureEngine.cancel()
+                else -> if (gestureEngine.isClaimed) gestureEngine.cancel() else GestureAction.Ignore
+            }
+        when (action) {
+            is GestureAction.Activate ->
+                showOverlay(
+                    side = action.side,
+                    x = action.x,
+                    y = action.y,
+                )
+            is GestureAction.Update -> {
+                val selected = overlay?.updateGesture(action.x, action.y)
+                gestureEngine.setSelection(selected)
+            }
+            is GestureAction.Commit -> overlay?.finishGesture()
+            GestureAction.Cancel -> overlay?.cancelGesture()
+            GestureAction.Ignore, GestureAction.PassThrough -> Unit
+        }
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            activeEnvironmentApproved = false
+            activeGestureConfig = null
+        }
+    }
+
+    private fun showOverlay(
+        side: io.github.mangi.flymefreeform.gesture.CornerSide,
+        x: Float,
+        y: Float,
+    ) {
+        removeOverlay()
+        morePanelActive = false
+        val params = createOverlayParams(focusable = false)
+        var view: CornerRadialOverlayView? = null
+        try {
+            view =
+                CornerRadialOverlayView(context, this) { code ->
+                    logger(Log.INFO, code, null)
+                }
+            view.begin(
+                side = side,
+                catalog = catalogSnapshot,
+                x = x,
+                y = y,
+            )
+            overlay = view
+            windowManager.addView(view, params)
+        } catch (exception: RuntimeException) {
+            handleOverlayFailure(view, "SYSTEM_OVERLAY_ADD_FAILED", exception)
+        } catch (error: LinkageError) {
+            handleOverlayFailure(view, "SYSTEM_OVERLAY_ADD_FAILED", error)
+        }
+    }
+
+    private fun handleOverlayFailure(
+        view: CornerRadialOverlayView?,
+        diagnosticCode: String,
+        throwable: Throwable,
+    ) {
+        gestureEngine.cancel()
+        if (view != null) {
+            overlay = view
+            removeOverlay()
+        } else {
+            overlay = null
+        }
+        logOverlayFailure(diagnosticCode, throwable)
+    }
+
+    private fun logOverlayFailure(
+        diagnosticCode: String,
+        throwable: Throwable,
+    ) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastOverlayFailureLogAt >= OVERLAY_FAILURE_LOG_INTERVAL_MS) {
+            lastOverlayFailureLogAt = now
+            logger(Log.WARN, diagnosticCode, throwable)
+        }
+    }
+
+    override fun onAppCommitted(entry: RadialAppEntry) {
+        val generation = pointerGeneration
+        activeEnvironmentApproved = false
+        gestureEngine.cancel()
+        removeOverlay()
+        handler.post {
+            if (generation == pointerGeneration) launchCommittedApp(entry)
+        }
+    }
+
+    private fun launchCommittedApp(entry: RadialAppEntry) {
+        if (!isGestureEnvironmentAllowed()) return
+        // 工具（小布识屏 / 屏幕翻译等）是侧边栏进程内的 AbsTool，不能当应用启动：
+        // 转交侧边栏执行，不创建小窗，因此也不计入「最近小窗」。
+        if (ModulePreferences.isToolComponent(entry.component)) {
+            if (!isGestureEnvironmentAllowed()) {
+                // 环境闸门（横屏/游戏模式/关键系统界面前台）拦截时不触发执行，之前是静默的。
+                logger(Log.WARN, "TOOL_LAUNCH_ENV_BLOCKED ${entry.component.className}", null)
+                return
+            }
+            logger(
+                    Log.INFO,
+                    "TOOL_LAUNCH_ATTEMPT ${entry.component.className} @${latestPointerX.toInt()},${latestPointerY.toInt()}",
+                    null,
+                )
+            if (!sidebar.runTool(entry.component.className, latestPointerX, latestPointerY)) {
+                logger(Log.WARN, "TOOL_LAUNCH_REJECTED ${entry.component.className}", null)
+            }
+            return
+        }
+        when (val result = launchWithCommitter(entry.component)) {
+            // Started 时最近小窗由 IPC/同步路径各自 publish，这里不重复
+            FreeformLaunchResult.Started -> Unit
+            FreeformLaunchResult.TargetUnavailable ->
+                logger(Log.WARN, "FREEFORM_LAUNCH_TARGET_UNAVAILABLE", null)
+            is FreeformLaunchResult.Failed ->
+                logger(Log.WARN, result.diagnosticCode, result.cause)
+        }
+    }
+
+    /**
+     * 平台无关提交（审查意见 P1：统一回退语义；P0：不阻塞 system_server 主线程）。
+     *
+     * 本方法在 **system_server 主线程**执行（`onAppCommitted` → `handler.post`），
+     * 因此**绝不能**同步等待回执。改为异步：
+     *  - 请求发出后立即返回 `Submitted`，真正的结果由回调处理；
+     *  - 回调里再按三态决定是否回退（切回 handler 线程执行 UI 相关动作）。
+     *
+     * 三条互斥规则：
+     *  - **受理**：已交给 SystemUI 的 BubbleController → 不再重复启动，也不回退；
+     *  - **明确拒绝**：可安全回退 → 走 ColorOS 原生自由窗启动；
+     *  - **结果未知**（超时 / 通道不可用）：**不回退也不重试**，只记诊断码。
+     */
+    private fun launchWithCommitter(component: ComponentName): FreeformLaunchResult {
+        val injected = committer
+        if (injected == null) return runFallback(component)
+        if (injected is GestureBubbleIpcClient) {
+            return try {
+                injected.submit(component) { outcome -> onCommitOutcome(component, outcome) }
+                // 已发出即为「请求已提交」，真实结果异步到达；不代表气泡已显示
+                FreeformLaunchResult.Started
+            } catch (t: Throwable) {
+                logger(Log.WARN, "COMMITTER_CRASHED ${t.javaClass.simpleName}", t)
+                committerUnknown(component)
+            }
+        }
+        // 测试替身：Bool 语义按「受理 / 拒绝」二分
+        val accepted =
+            try {
+                injected.commit(component)
+            } catch (t: Throwable) {
+                logger(Log.WARN, "COMMITTER_CRASHED ${t.javaClass.simpleName}", t)
+                return committerUnknown(component)
+            }
+        return if (accepted) {
+            FreeformLaunchResult.Started
+        } else {
+            runFallback(component)
+        }
+    }
+
+    /**
+     * 执行平台回退并统一记录结果。
+     *
+     * 回退只在**明确拒绝**时发生；`Started` 只表示 `startActivity` 返回成功，
+     * 不代表窗口可见。「最近小窗」由调用方按各自语义决定是否 publish，
+     * 这里不重复记录，避免同一组件在一次手势里被写入两次。
+     */
+    private fun runFallback(component: ComponentName): FreeformLaunchResult {
+        logger(
+            Log.INFO,
+            "COMMITTER_FALLBACK ${fallbackLauncher.javaClass.simpleName} ${component.flattenToShortString()}",
+            null,
+        )
+        return when (val result = fallbackLauncher.launchFallback(component)) {
+            FallbackLaunchResult.Started -> FreeformLaunchResult.Started
+            FallbackLaunchResult.TargetUnavailable -> FreeformLaunchResult.TargetUnavailable
+            is FallbackLaunchResult.Failed ->
+                FreeformLaunchResult.Failed(
+                    result.diagnosticCode,
+                    result.cause ?: IllegalStateException("fallback failed without cause"),
+                )
+        }
+    }
+
+    /** IPC 回调（后台线程）：切回 handler 线程处理回退与记录。 */
+    private fun onCommitOutcome(
+        component: ComponentName,
+        outcome: GestureBubbleIpcProtocol.Outcome,
+    ) {
+        handler.post {
+            when (outcome) {
+                GestureBubbleIpcProtocol.Outcome.Accepted -> {
+                    logger(Log.INFO, "COMMIT_ACCEPTED ${component.flattenToShortString()}", null)
+                    publishRecentFreeform(component)
+                }
+                GestureBubbleIpcProtocol.Outcome.Rejected -> {
+                    // 明确拒绝且可安全回退
+                    val fallback = runFallback(component)
+                    if (fallback == FreeformLaunchResult.Started) publishRecentFreeform(component)
+                }
+                GestureBubbleIpcProtocol.Outcome.Unknown -> {
+                    // 不回退、不重试：避免同一次手势开出两个窗口
+                    logger(Log.WARN, "COMMITTER_RESULT_UNKNOWN ${component.flattenToShortString()}", null)
+                }
+            }
+        }
+    }
+
+    private fun committerUnknown(component: ComponentName): FreeformLaunchResult =
+        FreeformLaunchResult.Failed(
+            "COMMITTER_RESULT_UNKNOWN",
+            CommitterUnknownException(component.flattenToString()),
+        )
+
+    /** committer 结果未知时的哨兵异常（Failed.cause 为非空 Throwable）。 */
+    private class CommitterUnknownException(component: String) :
+        RuntimeException("committer result unknown: $component")
+
+    /**
+     * Hook 进程的框架远端配置是只读的（实测 `edit()` 抛 `UnsupportedOperationException`），
+     * 因此「最近小窗」经广播交给模块 App 落盘，侧边栏进程随后按只读方式读取渲染。
+     */
+    /**
+     * 把侧边栏工具目录转发给模块 App。
+     * system_server 发出的广播不受厂商「后台启动管控」限制（实测侧边栏进程会被拦），
+     * App 收到后落盘，设置界面的工具列表与扇形的工具图标都读这份数据。
+     */
+    /**
+     * App 打开设置时会广播索要工具目录（被动中继可能赶上 App 冷启动被厂商启动策略延迟），
+     * 这里注册接收器：收到请求就回发一次目录广播并刷新 Settings 文本副本。
+     */
+    private fun registerToolRequestReceiver() {
+        try {
+            context.registerReceiver(
+                object : BroadcastReceiver() {
+                    override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                        val cached = latestToolCatalog
+                        if (cached == null) {
+                            // 开机后还没拿到过目录：向侧边栏现拉一次，回包会再走本写入。
+                            sidebar.requestToolCatalog()
+                            return
+                        }
+                        SharedSettings.writeToolCatalog(context, stripIcons(cached))
+                        broadcastToolCatalog(shrinkIcons(cached))
+                        logger(Log.INFO, "TOOL_CATALOG_SERVED", null)
+                    }
+                },
+                IntentFilter(SharedStateProtocol.ACTION_REQUEST_TOOLS),
+                // 模块 App 与 system_server 不同 UID，必须显式导出（API 34+ 强制要求）
+                Context.RECEIVER_EXPORTED,
+            )
+        } catch (exception: Exception) {
+            logger(Log.WARN, "TOOL_REQUEST_RECEIVER_FAILED", exception)
+        }
+    }
+
+    /**
+     * @author bomo 接收模块 App 推来的**配置变更**（编解码见 `ConfigSnapshotCodec`）。
+     *
+     * 本进程读 RemotePreferences 是 `start()` 时的**进程内缓存**，无法自行感知设置改动
+     * （见 `ProcessConfiguration.refreshNow()` 注释）；由 App 主动推送是唯一可靠的实时通道。
+     * 解码失败时保持原配置不动，只留一条诊断码，不影响既有行为。
+     */
+    private fun registerConfigPushReceiver() {
+        try {
+            context.registerReceiver(
+                object : BroadcastReceiver() {
+                    override fun onReceive(receiverContext: Context?, intent: Intent?) {
+                        val next =
+                            ConfigSnapshotCodec.decode(
+                                intent?.getStringExtra(SharedStateProtocol.EXTRA_CONFIG),
+                            )
+                        if (next == null) {
+                            logger(Log.WARN, "CONFIG_PUSH_DECODE_FAILED", null)
+                            return
+                        }
+                        if (configuration.applyExternal(next)) {
+                            logger(Log.INFO, "CONFIG_PUSH_APPLIED", null)
+                        }
+                    }
+                },
+                IntentFilter(SharedStateProtocol.ACTION_CONFIG_CHANGED),
+                // 同上：配置由模块 App 推送，跨 UID
+                Context.RECEIVER_EXPORTED,
+            )
+        } catch (exception: Exception) {
+            logger(Log.WARN, "CONFIG_PUSH_RECEIVER_FAILED", exception)
+        }
+    }
+
+    /**
+     * 收到侧边栏目录：内存留全量（含图标，供扇形渲染）。
+     *
+     * 下行分两路（Settings.Global 单值实测上限 32KB，带图标目录约 60-110KB 必被拒）：
+     * - Settings 写**去图标文本版**（约 700B，稳定），作低配兜底；
+     * - 定向广播**压缩图标版**（72px WEBP）给 App 落远端配置——system_server 发出的
+     *   广播不受厂商后台启动管控拦截（实测侧边栏进程直发会被拦），App 端选择应用
+     *   界面的图标从此读取。
+     */
+    private fun publishToolCatalogToApp(catalog: String) {
+        latestToolCatalog = catalog
+        SharedSettings.writeToolCatalog(context, stripIcons(catalog))
+        broadcastToolCatalog(shrinkIcons(catalog))
+        logger(Log.INFO, "TOOL_CATALOG_RELAYED", null)
+    }
+
+    /** Settings 侧目录副本：去图标纯文本（`Settings.Global` 单值上限 32KB，实测 60KB 被拒）。 */
+    private fun stripIcons(catalog: String): String =
+        ToolCatalogCodec.encode(
+            ToolCatalogCodec.decode(catalog).map { record -> record.copy(iconPng = null) },
+        )
+
+    /** 定向广播目录给模块 App（setPackage 显式指定），App 收到后落远端配置。 */
+    private fun broadcastToolCatalog(catalog: String) {
+        runCatching {
+            context.sendBroadcast(
+                Intent(SharedStateProtocol.ACTION)
+                    .setPackage(SharedStateProtocol.MODULE_PACKAGE)
+                    .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+                    .putExtra(SharedStateProtocol.EXTRA_KIND, SharedStateProtocol.KIND_TOOL_CATALOG)
+                    .putExtra(SharedStateProtocol.EXTRA_CATALOG, catalog),
+            )
+        }.onSuccess {
+            logger(Log.INFO, "TOOL_CATALOG_BROADCAST", null)
+        }.onFailure { exception ->
+            logger(Log.WARN, "TOOL_CATALOG_BROADCAST_FAILED", exception)
+        }
+    }
+
+    /**
+     * 广播侧的目录副本压缩：图标统一压到 72px WEBP（每枚约 2-3KB，总量 60-110KB），
+     * 广播 Intent 与 App 侧远端配置（SharedPreferences）均可承载。
+     */
+    private fun shrinkIcons(catalog: String): String =
+        ToolCatalogCodec.encode(
+            ToolCatalogCodec.decode(catalog).map { record ->
+                record.copy(iconPng = record.iconPng?.let(::shrinkToWebp))
+            },
+        )
+
+    private fun shrinkToWebp(bytes: ByteArray): ByteArray? =
+        runCatching {
+            val source = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+            val scaled = Bitmap.createScaledBitmap(source, TOOL_ICON_PX, TOOL_ICON_PX, true)
+            java.io.ByteArrayOutputStream().use { stream ->
+                scaled.compress(Bitmap.CompressFormat.WEBP, 85, stream)
+                stream.toByteArray()
+            }
+        }.getOrNull()
+
+    /**
+     * 记录「小窗打开」：内存列表即时更新，Settings.Global 供侧边栏面板实时读取
+     * （跨进程广播在 ColorOS 上会被启动管控/延迟策略干扰，已弃用）。
+     */
+    private fun publishRecentFreeform(component: ComponentName) {
+        recentFreeformEntries.remove(component)
+        recentFreeformEntries.addFirst(component)
+        while (recentFreeformEntries.size > ModulePreferences.MAX_RECENT_FREEFORM) {
+            recentFreeformEntries.removeLast()
+        }
+        SharedSettings.writeRecentFreeform(context, recentFreeformEntries.toList())
+    }
+
+    override fun onMorePanelRequested() {
+        if (!isGestureEnvironmentAllowed()) {
+            removeOverlay()
+            return
+        }
+        val view = overlay ?: run {
+            logger(Log.WARN, "MORE_PANEL_NO_OVERLAY ignored", null)
+            return
+        }
+        morePanelActive = true
+        activeEnvironmentApproved = false
+        gestureEngine.cancel()
+        if (!sidebar.open(
+                // @author bomo 用手势真实方位决定面板锚向：原厂 mIsLeft 在自建面板路径下恒为默认值，
+                // 会导致右侧呼出也贴左。
+                leftSide = view.invokedSide == io.github.mangi.flymefreeform.gesture.CornerSide.Left,
+                beforeOpen = {
+                    if (overlay === view && lastSettings.enabled && isGestureEnvironmentAllowed()) {
+                        view.retainBackdropForPanel()
+                        true
+                    } else false
+                },
+                onResult = { result ->
+                    if (overlay === view) {
+                        if (result == ColorOsSidebarClient.Outcome.Fallback && lastSettings.enabled && isGestureEnvironmentAllowed() &&
+                            context.getSystemService(android.os.UserManager::class.java)?.isUserForeground == true
+                        ) {
+                            view.visibility = android.view.View.VISIBLE
+                            showBuiltInMorePanel(view)
+                        } else if (result != ColorOsSidebarClient.Outcome.Shown) removeOverlay()
+                    }
+                },
+                onExitStarted = { if (overlay === view) view.beginBackdropExit() },
+                onHideBackdrop = { hidden ->
+                    if (overlay === view) view.hideBackdropAfterFrame(hidden) else hidden()
+                },
+                onClosed = { if (overlay === view) removeOverlay() },
+            )
+        ) {
+            logger(Log.WARN, "MORE_PANEL_SIDEBAR_BUSY ignored (session already active)", null)
+            removeOverlay()
+        }
+    }
+
+    private fun showBuiltInMorePanel(view: CornerRadialOverlayView) {
+        val params = createOverlayParams(focusable = true)
+        try {
+            windowManager.updateViewLayout(view, params)
+            view.showBuiltInMorePanel()
+            view.requestFocus()
+        } catch (exception: RuntimeException) {
+            logger(Log.WARN, "SYSTEM_OVERLAY_FOCUS_FAILED", exception)
+            removeOverlay()
+        }
+    }
+
+    override fun onDismissRequested() {
+        activeEnvironmentApproved = false
+        gestureEngine.cancel()
+        removeOverlay()
+    }
+
+    override fun onCleanupFailed(throwable: Throwable) {
+        logOverlayFailure("SYSTEM_OVERLAY_DISPOSE_FAILED", throwable)
+    }
+
+    private fun createOverlayParams(focusable: Boolean): WindowManager.LayoutParams {
+        // 非聚焦窗不带 ALT 时位于输入法上方；聚焦面板则需要 ALT 保持相同层级。
+        val inputFlags =
+            if (focusable) {
+                WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
+            } else {
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            }
+        return WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
+                inputFlags,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.FILL
+            layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            setFitInsetsTypes(0)
+            title = "FlymeFreeformCornerOverlay"
+        }
+    }
+
+    private fun cancelActiveGesture() {
+        activeGestureConfig = null
+        gestureEngine.cancel()
+        overlay?.cancelGesture()
+    }
+
+    private fun removeOverlay() {
+        val view = overlay ?: return
+        overlay = null
+        if (sidebar.isPending) sidebar.cancel()
+        morePanelActive = false
+        val cleanupFailure = view.disposeOverlay()
+        try {
+            windowManager.removeViewImmediate(view)
+        } catch (_: IllegalArgumentException) {
+            // 已被系统移除；本地所有权仍需清空。
+        } catch (exception: RuntimeException) {
+            logger(Log.WARN, "SYSTEM_OVERLAY_REMOVE_FAILED", exception)
+        }
+        cleanupFailure?.let { throwable ->
+            logOverlayFailure("SYSTEM_OVERLAY_DISPOSE_FAILED", throwable)
+        }
+    }
+
+    private fun isGestureEnvironmentAllowed(): Boolean {
+        if (!environmentState.isGestureAllowed(refreshKeyguard = true)) return false
+        return !isCriticalSystemUiForeground()
+    }
+
+    private fun isDynamicEnvironmentAllowed(): Boolean = environmentState.isGestureAllowed()
+
+    private fun isCriticalSystemUiForeground(): Boolean {
+        focusedWindowPackage()?.let { packageName ->
+            if (packageName in CRITICAL_PACKAGES) return true
+        }
+        return try {
+            val atms = systemServer.activityTaskManager ?: return false
+            val root = readField(atms, "mRootWindowContainer") ?: return false
+            val task = findMethod(root.javaClass, "getTopDisplayFocusedRootTask", 0).invoke(root) ?: return false
+            val activity =
+                findMethod(task.javaClass, "topRunningActivity", 0).invoke(task) ?: return false
+            val packageName = readField(activity, "packageName") as? String ?: return false
+            packageName in CRITICAL_PACKAGES
+        } catch (_: ReflectiveOperationException) {
+            false
+        } catch (_: RuntimeException) {
+            false
+        }
+    }
+
+    private fun focusedWindowPackage(): String? =
+        try {
+            val windowManagerService = readWindowManagerService()
+            val root = readField(windowManagerService, "mRoot") ?: return null
+            val display =
+                findMethod(root.javaClass, "getTopFocusedDisplayContent", 0).invoke(root) ?: return null
+            val window = readField(display, "mCurrentFocus") ?: return null
+            findMethod(window.javaClass, "getOwningPackage", 0).invoke(window) as? String
+        } catch (_: ReflectiveOperationException) {
+            null
+        } catch (_: RuntimeException) {
+            null
+        }
+
+    private fun readWindowManagerService(): Any {
+        val atms =
+            systemServer.activityTaskManager
+                ?: throw NoSuchFieldException("ActivityTaskManagerService unavailable")
+        return readField(atms, "mWindowManager") ?: throw NoSuchFieldException("mWindowManager")
+    }
+
+    private fun readField(instance: Any, name: String): Any? {
+        var current: Class<*>? = instance.javaClass
+        while (current != null) {
+            try {
+                return current.getDeclaredField(name).also { it.isAccessible = true }.get(instance)
+            } catch (_: NoSuchFieldException) {
+                current = current.superclass
+            }
+        }
+        return null
+    }
+
+    private fun findMethod(type: Class<*>, name: String, parameterCount: Int): java.lang.reflect.Method {
+        var current: Class<*>? = type
+        while (current != null) {
+            current.declaredMethods.firstOrNull { method ->
+                method.name == name && method.parameterCount == parameterCount
+            }?.let { method ->
+                method.isAccessible = true
+                return method
+            }
+            current = current.superclass
+        }
+        throw NoSuchMethodException(name)
+    }
+
+    private data class QueuedPointerEvent(val event: MotionEvent, val generation: Long)
+
+    private companion object {
+        /** 小窗启动链路不使用图标，占位 1x1 即可。 */
+        val EMPTY_ICON = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+
+        const val CATALOG_THREAD_NAME = "FlymeFreeform-Catalog"
+
+        /** 设置侧目录副本的图标边长（px）。 */
+        const val TOOL_ICON_PX = 72
+        const val OVERLAY_FAILURE_LOG_INTERVAL_MS = 10_000L
+        val CRITICAL_PACKAGES =
+            setOf(
+                "com.android.systemui",
+                "com.android.permissioncontroller",
+                "com.google.android.permissioncontroller",
+                "com.android.packageinstaller",
+            )
+    }
+}

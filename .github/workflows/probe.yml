@@ -1,0 +1,35 @@
+name: Probe (instrumentation class dump)
+on: [workflow_dispatch, push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - name: Install SDK
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-$HOME/android-sdk}"
+          if [ ! -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            mkdir -p "$SDK_ROOT/cmdline-tools/latest"; curl -sSL -o /tmp/ct.zip "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip"
+            unzip -q /tmp/ct.zip -d /tmp/ct; mv /tmp/ct/cmdline-tools/* "$SDK_ROOT/cmdline-tools/latest/"
+          fi
+          yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK_ROOT" "platforms;android-35" "build-tools;35.0.0"
+          echo "SDK_ROOT=$SDK_ROOT" >> $GITHUB_ENV
+      - name: Build probe apk
+        run: |
+          set -e
+          BT="$SDK_ROOT/build-tools/35.0.0"
+          rm -rf out && mkdir -p out/classes out/dex out/assets
+          javac -nowarn -source 11 -target 11 -d out/classes -cp "$SDK_ROOT/platforms/android-35/android.jar" probe/Probe.java
+          "$BT/d8" --min-api 29 --lib "$SDK_ROOT/platforms/android-35/android.jar" --output out/dex $(find out/classes -name '*.class')
+          "$BT/aapt2" link -o out/base.apk -I "$SDK_ROOT/platforms/android-35/android.jar" --manifest probe/AndroidManifest.xml -A out/assets
+          cd out/dex && zip -q ../base.apk classes.dex && cd ..
+          cp ../probe/dex.json ../probe/java_probe.sh out/assets/ 2>/dev/null || true
+          keytool -genkeypair -keystore /tmp/k.jks -storepass android -keypass android -alias k -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=probe" >/dev/null 2>&1
+          "$BT/zipalign" -f 4 base.apk aligned.apk
+          "$BT/apksigner" sign --ks /tmp/k.jks --ks-pass pass:android --key-pass pass:android --out probe-signed.apk aligned.apk
+          "$BT/apksigner" verify probe-signed.apk && ls -l probe-signed.apk
+      - uses: actions/upload-artifact@v4
+        with: { name: probe-apk, path: out/probe-signed.apk }

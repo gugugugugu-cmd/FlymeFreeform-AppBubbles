@@ -1,0 +1,319 @@
+package io.github.mangi.flymefreeform.platform.pixel
+
+import android.content.BroadcastReceiver
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
+import android.os.UserHandle
+import android.util.Log
+import io.github.libxposed.api.XposedModule
+import io.github.mangi.flymefreeform.platform.common.BubbleLaunchRequest
+import io.github.mangi.flymefreeform.platform.common.BubbleLaunchResult
+
+/**
+ * 阶段 2 开发测试入口（不改手势 UI）。
+ *
+ * 在 SystemUI 进程动态注册广播接收器，收到 [ACTION_TEST_LAUNCH_BUBBLE] 后
+ * 从 extra 解析目标组件，构造 [BubbleLaunchRequest] 提交给 [PixelAppBubbleLauncher]，
+ * 并把结果以 [BubbleLaunchResult] 状态 + 诊断日志形式暴露。
+ *
+ * 触发方式（外部 adb / 模块 App）：
+ *   adb shell am broadcast -a io.github.mangi.flymefreeform.action.TEST_LAUNCH_BUBBLE \
+ *       --es component "com.tencent.mm/com.tencent.mm.ui.LauncherUI" \
+ *       --el user_id 0 \
+ *       --es source "test-entry"
+ *
+ * 结果读取：Logcat 关键字 `BUBBLE_TEST_RESULT`（状态码）与 `BUBBLE_TEST_DIAG`（诊断）。
+ */
+internal class PixelBubbleTestEntry(
+    private val context: Context,
+    private val module: XposedModule,
+) {
+    private val launcher =
+        PixelBubbleBackend.get(context) { msg ->
+            // LSPosed 模块进程里 android.util.Log 不进模块日志，必须转给 module.log()
+            module.log(Log.INFO, TAG, "BUBBLE_DIAG $msg")
+        }
+    private var bound = false
+    private var receiver: BroadcastReceiver? = null
+
+    fun start() {
+        if (bound) return
+        bound = true
+        // 绑定 BubbleController：
+        // 1) 先试主动反射（INSTANCE 单例 / LocalServices）
+        // 2) hook BubblesManager 构造器 + 事件回调兜底（阶段 1 验证过的
+        //    BubblesManager.mBubbles → this$0 → BubbleController 链）
+        launcher.bindController()
+        installBubbleControllerCapture()
+        val filter =
+            IntentFilter().apply {
+                addAction(ACTION_TEST_LAUNCH_BUBBLE)
+                // 兼容历史文档命令（io.github.mangi.flymefreeform.ACTION_TEST_LAUNCH_BUBBLE）
+                addAction(ACTION_TEST_LAUNCH_BUBBLE_LEGACY)
+            }
+        // 具名内部类：需要读取发送方 uid / 包名，用反射调用以便低版本安全降级
+        receiver =
+            object : BroadcastReceiver() {
+                // 方法名经 android.jar(API 37) javap 核对：
+                //   public int getSentFromUid() / public String getSentFromPackage()
+                // （曾误写 getSendingUid()，该方法不存在，反射恒失败 → 全部请求被拒）
+                private fun sentFromUidOrUnknown(): Int =
+                    try {
+                        BroadcastReceiver::class.java
+                            .getMethod("getSentFromUid")
+                            .invoke(this) as Int
+                    } catch (_: Throwable) {
+                        -1
+                    }
+
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action != ACTION_TEST_LAUNCH_BUBBLE &&
+                        intent.action != ACTION_TEST_LAUNCH_BUBBLE_LEGACY
+                    ) {
+                        return
+                    }
+                    // 发送方 uid（Android 14+ 提供；低版本返回 -1 表示未知，按不可信处理）
+                    val senderUid = sentFromUidOrUnknown()
+                    if (!isTrustedCaller(senderUid)) {
+                        module.log(Log.WARN, TAG, "PIXEL_BUBBLE_TEST_REJECTED senderUid=$senderUid")
+                        return
+                    }
+                    module.log(Log.INFO, TAG, "PIXEL_BUBBLE_TEST_RECEIVED action=${intent.action}")
+                    val component =
+                        intent.getStringExtra(EXTRA_COMPONENT)
+                            ?.let(ComponentName::unflattenFromString)
+                    if (component == null) {
+                        module.log(Log.WARN, TAG, "BUBBLE_TEST_RESULT REQUEST_VALIDATION_FAILED no-component")
+                        return
+                    }
+                    val userId = intent.getLongExtra(EXTRA_USER_ID, 0L).toInt()
+                    val source = intent.getStringExtra(EXTRA_SOURCE) ?: "test-entry"
+                    // UserHandle.of(int) 在 SDK 37 为隐藏 API，用反射构造。
+                    val userHandle = runCatching {
+                        UserHandle::class.java.getMethod("of", Integer.TYPE)
+                            .invoke(null, userId) as UserHandle
+                    }.getOrNull()
+                    if (userHandle == null) {
+                        module.log(Log.WARN, TAG, "PIXEL_BUBBLE_TEST_USERHANDLE_REFLECT_FAILED", null)
+                        return
+                    }
+                    val request =
+                        BubbleLaunchRequest(
+                            component = component,
+                            userHandle = userHandle,
+                            source = source,
+                        )
+                    // 广播到达时再解一次（hook 可能已在此前捕获到实例）
+                    if (!launcher.isAvailable()) launcher.bindController()
+                    val result = launcher.launch(request)
+                    module.log(
+                        Log.INFO,
+                        TAG,
+                        "BUBBLE_TEST_RESULT ${resultStateName(result)} available=${launcher.isAvailable()} component=$component user=$userId",
+                    )
+                }
+            }
+        // Android 14+（API 34+）：动态注册非系统广播必须显式指定 exported 标志。
+        // 测试入口需要接收 adb / 外部进程广播，故用 RECEIVER_EXPORTED；
+        // 但导出后会成为任意第三方 App 可触发的入口，因此再用权限校验限定调用方。
+        // 正式发布构建不应包含本入口（见 requireTestScopeEnabled）。
+        if (!requireTestScopeEnabled()) {
+            module.log(Log.WARN, TAG, "PIXEL_BUBBLE_TEST_ENTRY_DISABLED production build")
+            return
+        }
+        // 关键：接收器绑到独立 HandlerThread。
+        // 若用默认重载，onReceive 在 SystemUI 主线程执行，而 launch() 内部要投递主线程并
+        // 同步等待 —— 自己等自己，必然 SUBMISSION_TIMEOUT（审查意见 P0-2）。
+        val looper = android.os.HandlerThread("flyme-bubble-test-rx").apply { start() }.looper
+        val rxHandler = android.os.Handler(looper)
+        // 5 参重载（API 33+）：绑定独立线程 + 显式导出状态。
+        //   曾误用 4 参无 flags 版本 → Android 14+ 抛 SecurityException
+        if (Build.VERSION.SDK_INT >= 33) {
+            context.registerReceiver(
+                receiver,
+                filter,
+                null,
+                rxHandler,
+                Context.RECEIVER_EXPORTED,
+            )
+        } else {
+            context.registerReceiver(receiver, filter, null, rxHandler)
+        }
+        module.log(Log.INFO, TAG, "PIXEL_BUBBLE_TEST_ENTRY_READY launcherAvailable=${launcher.isAvailable()}")
+    }
+
+    /**
+     * 捕获 BubbleController 实例。
+     *
+     * 关键教训（真机日志）：BubbleController / BubblesManager 在模块 hook 安装前
+     * 就已构造完毕（SystemUI 进程常驻 + wm_shell 早期初始化），所以「hook 构造器」
+     * 永远等不到调用。改为 hook 它们的**任意实例方法**——只要该对象还活着，
+     * 启动后必然至少被调用一次（刷新、查询、dump 等），即可用 thisObject 拿到实例。
+     */
+    private fun installBubbleControllerCapture() {
+        val cl = context.javaClass.classLoader ?: return
+        // 目标类：BubbleController 本身（最优） + BubblesManager（阶段 1 验证的事件源）
+        captureFromClass(cl, "com.android.wm.shell.bubbles.BubbleController", "CONTROLLER")
+        captureFromClass(cl, "com.android.systemui.wmshell.BubblesManager", "BUBBLES_MANAGER")
+        // BubblesManager.mBubbles(IBubblesImpl) 也是高频对象，其 this$0 就是 controller
+        captureFromClass(cl, "com.android.wm.shell.bubbles.BubbleController\$IBubblesImpl", "IBUBBLES_IMPL")
+    }
+
+    /**
+     * 对目标类：hook 全部构造器 + 全部实例方法（排除明显高频噪声的 toString/hashCode 等，
+     * 但为最大化命中率仍然保留全部——仅首次命中会真正绑定，之后 AtomicBoolean 短路）。
+     */
+    private fun captureFromClass(cl: ClassLoader, className: String, tag: String) {
+        val cls = try { cl.loadClass(className) } catch (_: Throwable) { return }
+        val captured = java.util.concurrent.atomic.AtomicBoolean(false)
+        var methodHooked = 0
+        for (m in cls.declaredMethods) {
+            if (java.lang.reflect.Modifier.isStatic(m.modifiers)) continue
+            if (m.isSynthetic || m.isBridge) continue
+            try {
+                module
+                    .hook(m)
+                    .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.PROTECTIVE)
+                    .setId("flymefreeform.capture_${tag}_${m.name}_${m.parameterCount}")
+                    .intercept { chain ->
+                        if (captured.compareAndSet(false, true)) {
+                            try {
+                                onInstanceCaptured(chain.thisObject, tag)
+                            } catch (_: Throwable) {
+                            }
+                        }
+                        chain.proceed()
+                    }
+                methodHooked++
+            } catch (_: Throwable) {
+            }
+        }
+        var ctorHooked = 0
+        for (ctor in cls.declaredConstructors) {
+            try {
+                module
+                    .hook(ctor)
+                    .setExceptionMode(io.github.libxposed.api.XposedInterface.ExceptionMode.PROTECTIVE)
+                    .setId("flymefreeform.capture_${tag}_ctor_$ctorHooked")
+                    .intercept { chain ->
+                        val result = chain.proceed()
+                        if (captured.compareAndSet(false, true)) {
+                            try {
+                                onInstanceCaptured(result, tag)
+                            } catch (_: Throwable) {
+                            }
+                        }
+                        result
+                    }
+                ctorHooked++
+            } catch (_: Throwable) {
+            }
+        }
+        module.log(
+            Log.INFO,
+            TAG,
+            "PIXEL_BUBBLE_CAPTURE_HOOKED tag=$tag methods=$methodHooked ctors=$ctorHooked",
+        )
+    }
+
+    /** 某目标对象首次被观测到：按 tag 决定是直接作为 controller 还是走 BubblesManager 链。 */
+    private fun onInstanceCaptured(instance: Any?, tag: String) {
+        if (instance == null) return
+        when (tag) {
+            "CONTROLLER" -> {
+                launcher.setController(instance)
+                module.log(Log.INFO, TAG, "PIXEL_BUBBLE_CONTROLLER_CAPTURED via=$tag")
+            }
+            "BUBBLES_MANAGER" -> {
+                bindWithRetry(instance)
+                module.log(Log.INFO, TAG, "PIXEL_BUBBLE_CONTROLLER_CAPTURED via=$tag")
+            }
+            "IBUBBLES_IMPL" -> {
+                launcher.bindFromIBubblesImpl(instance)
+                module.log(Log.INFO, TAG, "PIXEL_BUBBLE_CONTROLLER_CAPTURED via=$tag available=${launcher.isAvailable()}")
+            }
+        }
+    }
+
+    /**
+     * 延迟重试绑定 controller：BubblesManager 构造后 mBubbles/this$0 可能尚未赋值，
+     * 用主线程 Handler 延迟重试（最多 20 次 × 500ms），确保链就绪。
+     */
+    private fun bindWithRetry(bubblesManager: Any) {
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+        val attempts = java.util.concurrent.atomic.AtomicInteger(0)
+        val task =
+            object : Runnable {
+                override fun run() {
+                    if (launcher.isAvailable()) return
+                    launcher.bindFromBubblesManager(bubblesManager)
+                    if (!launcher.isAvailable() && attempts.incrementAndGet() < 20) {
+                        handler.postDelayed(this, 500L)
+                    }
+                }
+            }
+        handler.post(task)
+    }
+
+    /**
+     * 测试入口是否允许启用。
+     *
+     * 广播入口是 [Context.RECEIVER_EXPORTED] 的，任何第三方 App 都能伪造启动请求。
+     * 因此仅在显式开启 `persist.flymefreeform.test_entry=1` 时注册：
+     *   adb shell setprop persist.flymefreeform.test_entry 1
+     *   adb shell setprop persist.flymefreeform.test_entry 0   # 关闭
+     * 未设置时默认关闭，避免测试后门进入日常使用。
+     */
+    private fun requireTestScopeEnabled(): Boolean =
+        try {
+            // android.os.SystemProperties 是隐藏 API（compileSdk 无此符号），只能反射访问
+            val cls = Class.forName("android.os.SystemProperties")
+            val raw = cls.getMethod("get", String::class.java, String::class.java)
+                .invoke(null, PROP_TEST_ENTRY, "0") as? String
+            raw == "1" || raw.equals("true", ignoreCase = true)
+        } catch (_: Throwable) {
+            false
+        }
+
+    /**
+     * 校验广播调用方：只接受 shell(2000) / root(0) / system(1000)。
+     *
+     * adb broadcast 的发送者 uid 是 2000（shell），普通三方 App 是其自身 uid，一律拒绝。
+     * 取不到 uid（-1）同样拒绝。
+     */
+    private fun isTrustedCaller(receiverUid: Int): Boolean =
+        receiverUid == 0 ||
+            receiverUid == android.os.Process.SHELL_UID ||
+            receiverUid == android.os.Process.SYSTEM_UID
+
+    private fun resultStateName(result: BubbleLaunchResult): String =
+        when (result) {
+            BubbleLaunchResult.RequestValidationFailed -> "REQUEST_VALIDATION_FAILED"
+            BubbleLaunchResult.TargetResolutionFailed -> "TARGET_RESOLUTION_FAILED"
+            BubbleLaunchResult.BackendUnavailable -> "BACKEND_UNAVAILABLE"
+            BubbleLaunchResult.BubbleRequestSubmitted -> "BUBBLE_REQUEST_SUBMITTED"
+            BubbleLaunchResult.SubmissionTimeout -> "SUBMISSION_TIMEOUT"
+            BubbleLaunchResult.BubbleCreateFailed -> "BUBBLE_CREATE_FAILED"
+            BubbleLaunchResult.TaskLaunchFailed -> "TASK_LAUNCH_FAILED"
+            BubbleLaunchResult.ExpandFailed -> "EXPAND_FAILED"
+            BubbleLaunchResult.ResultUnknown -> "RESULT_UNKNOWN"
+            BubbleLaunchResult.FallbackLaunch -> "FALLBACK_LAUNCH"
+            is BubbleLaunchResult.Failed -> "FAILED_${result.diagnosticCode}"
+        }
+
+    companion object {
+        const val ACTION_TEST_LAUNCH_BUBBLE = "io.github.mangi.flymefreeform.action.TEST_LAUNCH_BUBBLE"
+        const val ACTION_TEST_LAUNCH_BUBBLE_LEGACY =
+            "io.github.mangi.flymefreeform.ACTION_TEST_LAUNCH_BUBBLE"
+        const val EXTRA_COMPONENT = "component"
+        const val EXTRA_USER_ID = "user_id"
+        const val EXTRA_SOURCE = "source"
+
+        /** 测试入口开关：setprop persist.flymefreeform.test_entry 1 开启，默认关闭。 */
+        const val PROP_TEST_ENTRY = "persist.flymefreeform.test_entry"
+        private const val TAG = "FlymeFreeform"
+    }
+}

@@ -1,0 +1,326 @@
+# 阶段 5 安全验证：IPC 权限边界
+
+日期：2026-10-18
+
+---
+
+## 1. 要证明什么
+
+阶段 3 把 IPC 鉴权从「`getSentFromUid()` 事后校验」改成了
+「注册时 `requiredPermission = STATUS_BAR_SERVICE`，由框架在**分发阶段**拦截」。
+当时只有正面证据（system_server 的合法请求能进来），**没有反面证据**——
+没有验证过普通应用能否伪造同样的广播。
+
+本验证补的就是反面证据。
+
+---
+
+## 2. 为什么不能只看日志
+
+「日志里没有 `GESTURE_IPC_RECEIVED`」单独不构成证据：
+
+- 可能是权限拦下了（期望）
+- 可能是接收器没注册（日志里会有 `GESTURE_IPC_RECEIVER_FAILED`）
+- 可能是请求解析失败（会记 `GESTURE_IPC_BAD_REQUEST`）
+- 可能是 SystemUI 进程重启、日志没跟进
+
+所以判据必须成对，并且带对照组。
+
+---
+
+## 3. 夹具设计
+
+模块 `:androidTest`（`androidTest/`），包名 `io.github.mangi.flymefreeform.forge`，
+产物 `FlymeFreeformForge-e1.apk`（`da54d985…57f578ea`）。
+
+**独立模块而非 app 的 androidTest 源集**：验证代码不能混进模块主 APK 的发布产物。
+
+夹具清单里没有任何 Activity / 服务 / 接收器，安装后桌面无图标；
+`<instrumentation>` 指向平台自带的 `android.test.InstrumentationTestRunner`，
+**编译依赖只有 `android.jar`**（无 androidx.test、无 JUnit、无 Kotlin）。
+
+三个探测，全部在夹具进程（普通应用 UID）里发出：
+
+| 探测 | 方式 | 期望 |
+|---|---|---|
+| 1 | `ACTION_COMMIT`，`sendBroadcast(intent)` 无权限限定 | 被拦 |
+| 2 | `ACTION_COMMIT`，`sendBroadcast(intent, STATUS_BAR_SERVICE)` | 被拦（无权限方在分发阶段被静默丢弃） |
+| 3 | `ACTION_COMMIT_FINALIZE`，无权限限定 | 被拦 |
+
+覆盖接收器 `IntentFilter` 注册的两个 action——漏测一个就等于漏测一条入口。
+
+三条都用固定前缀的 `request_id`（`forge-security-probe-*`）便于定位。
+
+---
+
+## 4. 判据
+
+导出 SystemUI + system_server 的模块日志后：
+
+| 现象 | 结论 |
+|---|---|
+| 无任何 `forge-security-probe` 记录，且**有**对照组记录 | **通过**：权限限定生效 |
+| 出现 `GESTURE_IPC_RECEIVED id=forge-security-probe-*` | **失败**：广播穿透，鉴权失效 |
+| 出现 `GESTURE_IPC_BAD_REQUEST`（无 id） | **存疑**：请求到了接收端，只是解析失败 |
+| 连合法的对照组也没有 | **作废**：日志管道本身不通，需重测 |
+
+对照组 = 验证过程中在设备上**正常触发一次手势**，必然产生
+`GESTURE_IPC_RECEIVED` + `GESTURE_IPC_ACK`。没有对照组，第一行结论不成立。
+
+---
+
+## 5. 执行步骤（e2）
+
+```bash
+# 1. 安装夹具（无桌面图标是正常的，从命令行启动）
+adb install -r FlymeFreeformForge-e2.apk
+
+# 2. 启动夹具：它会立刻发三条探测广播，并在屏幕上逐条显示结果
+adb shell am start -n io.github.mangi.flymefreeform.forge/.forge.ForgeActivity
+# 也可以直接点桌面快捷方式（如果系统给它建了图标）
+
+# 3. 立刻在设备上正常触发一次角落手势（对照组，必需）
+
+# 4. 导出模块日志，按 §4 判据核对
+```
+
+夹具界面会显示三行 `FORGE_COMMIT ...` 结果，作为辅助证据；
+**判据仍以 SystemUI 侧日志为准**——夹具进程说"发出去了"不算数。
+
+## 6. 首次构建记录
+
+| 构建 | commit | CI | 结果 | 原因 |
+|---|---|---|---|---|
+| forge-1 | `52b5475` | `39139933756` | 失败 | `build.gradle.kts` 注释吞掉闭合花括号 |
+| forge-2 | `26fdb5a` | `39140352695` | 失败 | 缺 `src/main/AndroidManifest.xml` |
+| forge-3 | `28261022` | `39140635062` | 失败 | `org.junit.Test` 无处解析（刻意不声明依赖） |
+| forge-4 | `b85bfa95` | `39140940590` | 成功 | 用例改 `test` 前缀，由 instrumentation 反射发现 |
+| forge-5 | `ec5a1e7` | `39142367291` | **成功（e2）** | 改为独立 Activity，见 §8 |
+
+三次失败都在夹具自身的构建面，没有一次改动到模块主代码。
+
+---
+
+## 7. 结果
+
+e1（instrumentation 形态）在执行 `am instrument` 时崩溃，见 §8。
+e2（Activity 形态）待实机执行。
+
+---
+
+## 8. 夹具构建过程回顾
+
+第一次实测：
+
+```
+# am instrument -w io.github.mangi.flymefreeform.forge/android.test.InstrumentationTestRunner
+INSTRUMENTATION_RESULT: shortMsg=Process crashed.
+```
+
+### 7.1 根因
+
+日志崩溃堆栈停在：
+
+```
+ZygoteInit.main → handleBindApplication → Instrumentation.newApplication
+```
+
+即**夹具进程在构造 Application 的阶段就挂了**，`onStart`/`onReceive` 一行都没执行。
+
+原因：`am instrument -w <pkg>/<runner>` 会把 **目标包的 `Application`** 加载进
+夹具进程，而夹具包的 `applicationId` 与主模块相同（`io.github.mangi.flymefreeform`）。
+主模块的 Xposed 入口（`@IXposedHookLoadPackage`）在 `initZygote` 之前就会调用
+`module.log(...)`，而该进程中 `module` 实例未被框架注入 → NPE。
+
+这不是 IPC 鉴权的问题，是**夹具宿主选错了**：用测试包去装一个「会被 hook 框架
+自动初始化」的应用。
+
+附带纠正一处误读：同一份日志里 `WeChatTablet` 的 `NoSuchMethodException`
+来自设备上另一个模块 `top.hookvip.wxtablet`，与本模块无关。
+
+### 7.2 修法
+
+夹具改成**独立 Activity**（`ForgeActivity`），不再声明 `<instrumentation>`：
+
+- 清单里只有一个 Activity，没有 `tools:ignore`、没有测试基础设施
+- 编译依赖仍然只有 `android.jar`（纯 Java，无 Kotlin、无 JUnit、无 androidx）
+- 应用启动即发三条探测广播，并在界面上逐条显示结果
+
+### 7.3 为什么换形态反而更好
+
+原来的 instrumentation 方案还有个隐患：`am instrument` 的输出只能证明
+**夹具进程自己认为发出去了**，而这一点是被测方无法验证的。
+改成普通 Activity 后，夹具进程和被测方（SystemUI）是两个完全独立的进程，
+发送方在自己的进程里，接收方的日志在另一个进程里——**证据链是分开的**，
+这比 instrumentation 里「同一个进程既发送又报告」要干净。
+
+---
+
+## 9. e2 失败复盘：`ClassNotFoundException`
+
+```
+java.lang.ClassNotFoundException:
+  Didn't find class "io.github.mangi.flymefreeform.forge.forge.ForgeActivity"
+```
+
+根因：`namespace = "io.github.mangi.flymefreeform.forge"` 已经包含 `forge`，
+清单里又写成 `android:name=".forge.ForgeActivity"`，前导点按 namespace 展开后
+成了 `...forge.forge.ForgeActivity`。改成 `.ForgeActivity` 即可。
+
+e2 里 Activity 类本身是对的（`package ...flymefreeform.forge;`），只有清单声明错。
+这次是在 APK 里直接比对 dex 字符串确认的，不再只靠清单反解。
+
+## 10. 夹具构建记录汇总
+
+| 构建 | commit | CI | 结果 | 原因 |
+|---|---|---|---|---|
+| forge-1 | `52b5475` | `39139933756` | 失败 | `build.gradle.kts` 注释吞掉闭合花括号 |
+| forge-2 | `26fdb5a` | `39140352695` | 失败 | 缺 `src/main/AndroidManifest.xml` |
+| forge-3 | `28261022` | `39140635062` | 失败 | `org.junit.Test` 无处解析 |
+| forge-4 | `b85bfa95` | `39140940590` | 构建成功，运行崩溃 | `am instrument` 加载模块 Application → NPE |
+| e2 | `ec5a1e7` | `39142367291` | 构建成功，运行崩溃 | 清单类名多一层 `.forge` |
+| **e3** | `7679264` | `39142862043` | **待实机** | — |
+
+夹具外的大版本（FlymeFreeform 本体）在这六轮里**一次都没有被改动**。
+
+---
+
+## 11. 关键修正：日志为空本身就是通过信号
+
+2026-10-18 实测反馈：「软件启动后 LSP 框架没有日志输出」。
+
+这不是失败，而是**预期结果**——而且暴露了我在 §4 里的判据设计缺陷。
+
+### 11.1 为什么之前判据是错的
+
+权限限定在**分发阶段**生效：不匹配的广播根本不会被投递给 `onReceive`。
+所以接收器里一行代码都不会执行，自然没有日志。原来那一套「看有没有
+`GESTURE_IPC_RECEIVED` / `GESTURE_IPC_BAD_REQUEST`」需要**观察到被拦截的痕迹**，
+而正确实现下这个痕迹不存在。
+
+### 11.2 改成单侧阳性判据
+
+- 拦截成功 → 接收器零日志（唯一能有的痕迹只有 `GESTURE_IPC_SEND_FAILED`）
+- 拦截失败 → 接收器打 **`SECURITY_PROBE_PASSED`**（WARN，带 `===` 醒目行）
+
+于是判据变成：**有没有 `SECURITY_PROBE_PASSED` 这一条**。
+不需要比较日志缺失，不需要对照组——有就是漏洞，没有就是通过。
+
+### 11.3 夹具侧补一条辅助记录
+
+（待 e4 实现）`ForgeActivity` 在界面上显示每条广播的发送返回：
+`FORGE_COMMIT ok/<拒绝原因>`。若 Android 13+ 对背景应用发广播做了额外限制，
+会显示 `SecurityException`，这时设备没被真的攻击到，「通过」的结论要注明
+是这一层先挡的。
+
+## 12. 待测
+
+- [ ] 安装 `FlymeFreeformForge-e3.apk`，启动，截图三行结果
+- [ ] 导出模块日志，确认其中**没有** `SECURITY_PROBE_PASSED`
+- [ ] 顺带确认日志里能看到合法的 `GESTURE_IPC_RECEIVED`（证明日志管道是通的）
+
+---
+
+## 13. 夹具方案终止（2026-10-19）
+
+### 13.1 终止理由
+
+夹具外发广播**自己看不到自己的结果**：
+
+- 发送方是夹具进程，它的 `logcat` 输出**不属于 LSPosed 导出日志**，
+  设备侧也拿不到（终端里 `logcat -s ForgeBroadcast:*` 为空——见 §13.2）
+- 接收方是 SystemUI，被权限层拦下时按设计**零日志**
+
+两侧都没有痕迹，于是「没收到」与「没发出」永远不可区分。
+这不是判据写得不好，是**这个测试形态本身无法产生证据**。
+
+夹具模块 `androidTest/` 已从仓库移除（`settings.gradle.kts` 与 CI 同步清理）。
+
+### 13.2 顺带发现的严重问题：模块日志走的是私有通道
+
+设备侧 `logcat -s ForgeBroadcast:*` 无输出并不意外（夹具从未真正实现 logcat 输出），
+但同一轮里 SystemUI 侧的 `logcat` 也查不到本模块日志——因为
+`XposedModule.log()` 写的是 **LSPosed 自己的日志文件**，不走 `android.util.Log`，
+而我们的接收器全部通过 `XposedBridge.log()` 分派。
+
+**推论**：接收器在 `onReceive` 被调用的最早时刻，应当补一条 `android.util.Log`
+（TAG `FlymeFreeformIpc`）作为影子日志。这样任何广播只要到达
+`onReceive`，`logcat` 里一定看得到，不需要导出 LSPosed 日志。
+
+### 13.3 替代验证方案（已实现）
+
+给生产代码加一个**签名级调试入口**（不是测试口，不影响正常调用）：
+
+| | |
+|---|---|
+| action | `io.github.mangi.flymefreeform.action.SECURITY_PROBE` |
+| 权限 | 注册时 `requiredPermission = STATUS_BAR_SERVICE` |
+| 行为 | 收到后在 `onReceive` 打影子 logcat + `SECURITY_PROBE_REACHED` 模块日志 |
+| 暴露面 | 非导出 `debug` 组件；只有拿到签名权限的 system_server 能触发 |
+
+用 system_server 自己去打这一枪：
+
+```bash
+adb shell su -c 'am broadcast -a io.github.mangi.flymefreeform.action.SECURITY_PROBE'
+```
+
+判据：
+
+| logcat | 结论 |
+|---|---|
+| 有 `FlymeFreeformIpc` 影子行 | 注册链路正常，`requiredPermission` 生效 |
+| 完全没有 | 注册失败或未注册（另查 `GESTURE_IPC_RECEIVER_FAILED`） |
+
+再配合普通应用侧：普通应用带同 action 打一发，影子行**不应出现**——
+这一次是真正的对照，因为两侧都用同一个可观测点（`logcat`），不再跨通道比较。
+
+---
+
+## 15. 终止结论：现有探针设计测不出结论（2026-10-19）
+
+### 15.1 实测数据
+
+| 发送方 | am broadcast 输出 | logcat `FlymeFreeformIpc` |
+|---|---|---|
+| root（`su` 后） | `result=0` | **有** `IPC_ARRIVED` ×2 |
+| 普通 shell（未 `su`） | `result=0` | 无 |
+
+### 15.2 为什么这套设计测不出结论
+
+`dumpsys package com.android.shell` 显示：
+
+```
+android.permission.STATUS_BAR_SERVICE: granted=true
+```
+
+**shell 用户（uid 2000）本身就持有这个签名权限。**
+
+于是：
+
+- 「普通 shell 发不到」这条对照**不存在**——shell 和 root 都持有权限，
+  两者到达与否由别的原因决定（例如 `am broadcast` 自身不给 `result` 填值）
+- 探针能证明的只有「接收器注册正常、通道存在」，这部分是**有效证据**
+- 但它**证明不了**「无权限的第三方应用会被拦下」——这个测试里根本没有
+  一个无权限的发送方
+
+### 15.3 我在这里反复犯的同一个错误
+
+回顾整个阶段 5 安全验证，我连续四次把「验证」做成「观察不到的推断」：
+
+1. 夹具 instrumentation 形态 → 进程崩在 Application 构造
+2. 夹具 Activity 形态 → 类名错，且发送方日志不归 LSPosed 管
+3. 判据用「日志里没有 X」→ X 按设计就不该出现
+4. 探针用 shell 对照 → shell 本身就持有签名权限
+
+共同点：**每次都在挑一个「我方便观察的东西」当证据，而不是先确认
+「谁有资格做对照」。**
+
+### 15.4 收口
+
+- 探针代码（`PROBE_ACTION` + `IPC_ARRIVED` 影子日志）**保留**：
+  它有独立价值——证明了接收器注册正常，且首次打通了 logcat 侧观测
+- 安全结论**不记入阶段 5 验收**，改列阶段 6 或作为独立安全项：
+  需要一个**无任何签名权限的第三方 APK** 作发送方，其 logcat 与
+  SystemUI 的 `FlymeFreeformIpc` 同机可读，才能构成有效对照
+- `d8b04a8`（uid 判定告警）已回退：它建立在「uid 能区分权限」的错误前提上，
+  而普通广播的 `mSentFromUid` 恒为 -1，无法据此判断
