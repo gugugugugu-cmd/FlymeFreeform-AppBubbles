@@ -198,6 +198,7 @@ internal class CornerRadialOverlayView(
         this.catalog = catalog
         latestX = x
         latestY = y
+        shownAtUptime = SystemClock.uptimeMillis()
         radialImages.value = catalog.radialApps.map { entry -> entry.icon.asImageBitmap() }
         panelImages = catalog.panelApps.associate { entry -> entry.component to entry.icon.asImageBitmap() }
         selectedIndex = null
@@ -230,6 +231,13 @@ internal class CornerRadialOverlayView(
     fun finishGesture() {
         val selection = selectedIndex
         val target = selection?.let(::slotTarget)
+        // 诊断：此前 selection==null 直接 dismissAnimated 不留痕，日志里只能看到 exit-finished，
+        // 查不到是谁判的空选中。
+        moduleLog(
+            "RADIAL_FINISH selection=$selection target=$target " +
+                "x=${latestX.toInt()} y=${latestY.toInt()} " +
+                "elapsedMs=${SystemClock.uptimeMillis() - shownAtUptime}",
+        )
         when {
             selection == null -> dismissAnimated()
             target == null -> showMorePanel()
