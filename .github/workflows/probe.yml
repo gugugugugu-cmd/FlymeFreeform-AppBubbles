@@ -20,17 +20,19 @@ jobs:
           set -ex
           BT="$SDK_ROOT/build-tools/35.0.0"
           JAR="$SDK_ROOT/platforms/android-35/android.jar"
-          rm -rf out && mkdir -p out/classes
+          rm -rf out skeleton && mkdir -p out/classes
+          rm -rf skeleton && mkdir -p skeleton/minimal
+          java -jar /usr/local/bin/apktool.jar b skeleton/minimal -o skeleton/empty.apk
+          unzip -o -q skeleton/empty.apk -d out
           javac -nowarn -source 11 -target 11 -d out/classes -cp "$JAR" probe/Probe.java
           "$BT/d8" --min-api 29 --lib "$JAR" --output out $(find out/classes -name '*.class')
-          cp probe/probe.prop out/apktool.yml
-          sed -i 's/apkFileName.*/apkFileName: probe.apk/' out/apktool.yml
-          echo "version: 2.10.0" >> out/apktool.yml
-          echo "{sdkInfo: versionInfo: {minSdkVersion: '29', targetSdkVersion: '35'}, packageInfo: forcedPackageId: '127'}" >> out/apktool.yml
-          cp probe/AndroidManifest.xml out/AndroidManifest.xml
-          mkdir -p out/assets && cp probe/assets/* out/assets/ 2>/dev/null || true
-          echo '<?xml version="1.0" encoding="utf-8"?>' > out/res/values/strings.xml 2>/dev/null || (mkdir -p out/res/values && echo '<?xml version="1.0" encoding="utf-8"?>' > out/res/values/strings.xml)
-          echo '<resources><string name="app_name">Flyme Probe</string></resources>' >> out/res/values/strings.xml
+          sed -i 's/apkFileName: .*/apkFileName: probe.apk/' out/apktool.yml
+          python3 - <<'PY'
+p='out/AndroidManifest.xml'
+s=open(p).read()
+s=s.replace('package="io.github.mangi.flymefreeformprobe"','package="io.github.mangi.flymefreeformprobe" platformBuildVersionCode="35" platformBuildVersionName="15"')
+open(p,'w').write(s)
+PY
           java -jar /usr/local/bin/apktool.jar b out -o out/probe-unsigned.apk
           unzip -l out/probe-unsigned.apk
           keytool -genkeypair -keystore /tmp/k.jks -storepass android -keypass android -alias k -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=probe"
