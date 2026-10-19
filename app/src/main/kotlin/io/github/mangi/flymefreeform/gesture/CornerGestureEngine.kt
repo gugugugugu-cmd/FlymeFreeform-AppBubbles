@@ -114,7 +114,9 @@ internal class CornerGestureEngine {
 
         val inward = if (activeSide == CornerSide.Left) x - originX else originX - x
         val upward = originY - y
-        if (inward < -config.reverseTolerance || upward < -config.reverseTolerance) {
+        // 反向容差只用于「还没认领」时的起步抖动过滤；一旦已 Activate（轮盘已经弹出），
+        // 反向移动应当交给选择逻辑处理，不能再整手 cancel——否则轮盘还在屏幕上，引擎却装死。
+        if (!claimed && (inward < -config.reverseTolerance || upward < -config.reverseTolerance)) {
             return cancel()
         }
         if (!claimed) {
@@ -133,6 +135,15 @@ internal class CornerGestureEngine {
     fun up(pointerId: Int): GestureAction {
         if (pointerId != this.pointerId) return cancel()
         if (!claimed) {
+            // claimed 与「轮盘是否已弹出」是两套状态：SystemUI 侧 pilfer 成功就会显示轮盘，
+            // 而引擎可能因起步抖动没走到 claimed=true。此时轮盘已在屏幕上，
+            // 返回 PassThrough 会让上层按「什么都没发生」收摊，表现为「轮盘一出现就消失」。
+            // 只要阶段表明手势已经启动过，就必须给上层一个明确的收尾动作。
+            if (handoffStarted()) {
+                val selection = selectedIndex
+                clearTracking(GesturePhase.Committing)
+                return GestureAction.Commit(selection)
+            }
             reset()
             return GestureAction.PassThrough
         }
@@ -143,10 +154,18 @@ internal class CornerGestureEngine {
     }
 
     fun cancel(): GestureAction {
-        val wasClaimed = claimed
+        // 同上：轮盘可能已经弹出（pilfer 成功）而 claimed 仍为 false，
+        // 此时必须回 Cancel 让上层收掉轮盘，不能当成「没接管过」。
+        val wasClaimed = claimed || handoffStarted()
         clearTracking(if (wasClaimed) GesturePhase.Cancelling else GesturePhase.Idle)
         return if (wasClaimed) GestureAction.Cancel else GestureAction.PassThrough
     }
+
+    /** 轮盘是否已经由本次手势拉起（不依赖 claimed 标记）。 */
+    private fun handoffStarted(): Boolean =
+        phase == GesturePhase.Revealing ||
+            phase == GesturePhase.Selecting ||
+            phase == GesturePhase.MorePanel
 
     fun setSelection(index: Int?) {
         if (claimed) selectedIndex = index
